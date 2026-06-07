@@ -12,6 +12,8 @@ allow-expect-in-tests = true
 # Domain acronyms that need no backticks in docs (`..` keeps clippy defaults).
 doc-valid-idents = [
     "SQLite",
+    "OAuth",
+    "OIDC",
     "JWKS",
     "JWT",
     "OCR",
