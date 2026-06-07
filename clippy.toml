@@ -8,3 +8,18 @@ enum-variant-size-threshold = 200
 # Tests may panic via unwrap/expect; production code may not (lint-enforced).
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+
+# Domain acronyms that need no backticks in docs (`..` keeps clippy defaults).
+doc-valid-idents = [
+    "SQLite",
+    "JWKS",
+    "JWT",
+    "OCR",
+    "TOML",
+    "MCP",
+    "RS256",
+    "ES256",
+    "FTS5",
+    "SHA-256",
+    "..",
+]

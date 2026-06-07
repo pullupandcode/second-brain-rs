@@ -38,6 +38,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 all = { level = "deny", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
+# Conflicts with rustc `unreachable_pub`; we prefer explicit `pub(crate)`.
+redundant_pub_crate = "allow"
 indexing_slicing = "deny"
 wildcard_enum_match_arm = "deny"
 fn_params_excessive_bools = "deny"
