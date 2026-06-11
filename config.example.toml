@@ -1,0 +1,50 @@
+# Example configuration for second-brain-rs.
+#
+# Copy to a machine-local path (e.g. config.local.toml) and edit listen,
+# public_base_url, vault_path, state_path, and the [auth] settings.
+
+listen = "127.0.0.1:3000"           # host:port to bind
+public_base_url = "http://127.0.0.1:3000"
+vault_path = "/path/to/vault"
+state_path = "/path/to/state"
+
+[auth]
+mode = "jwt"                          # use "development" only for local loopback testing
+audience = "second-brain-rs"
+trusted_issuers = ["https://idp.example.com/application/o/second-brain/"]
+discovery_authorization_server = "https://idp.example.com/application/o/second-brain/"
+jwks_cache_ttl_seconds = 3600
+jwt_algorithms = ["RS256"]
+# Development-mode scopes used when a client sends no explicit scope claim.
+development_default_scopes = ["vault:read", "vault:write", "vault:capture", "daily:append"]
+
+[index]
+# Optional sqlite_path; defaults to {state_path}/index.sqlite.
+watcher_polling = false
+ignored_globs = [
+    ".obsidian/workspace*",
+    ".trash/**",
+    "**/.DS_Store",
+    "**/*.sync-conflict-*",
+]
+
+[writes]
+cooldown_seconds = 2
+
+[audit]
+# When greater than 0, startup archives the write-audit DB once it exceeds this.
+retention_max_rows = 0
+
+[daily_note]
+# A = inline daily append; B = dated capture records (default).
+capture_default_pattern = "B"
+
+[ocr]
+enabled = false
+
+[logging]
+# Keep false unless debugging locally; tool args can contain private vault text.
+log_args = false
+
+[framework]
+schema_path = "_meta/framework.yaml"

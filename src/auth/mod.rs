@@ -4,9 +4,31 @@ pub mod dev;
 pub mod discovery;
 pub mod scopes;
 
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
-use crate::auth::scopes::Scope;
+use crate::{
+    auth::{dev::DevAuthenticator, scopes::Scope},
+    config::{AuthMode, ServerConfig},
+};
+
+/// Build the authenticator selected by `config.auth.mode`.
+///
+/// The JWT-backed authenticator lands in Phase 5; until then the `Jwt` mode
+/// uses a no-scope development authenticator so the server starts cleanly.
+#[must_use]
+pub fn build_authenticator(config: &ServerConfig) -> Arc<dyn Authenticator> {
+    match config.auth.mode {
+        AuthMode::Development => Arc::new(DevAuthenticator::new(
+            config
+                .auth
+                .development_default_scopes
+                .iter()
+                .copied()
+                .collect(),
+        )),
+        AuthMode::Jwt => Arc::new(DevAuthenticator::new(HashSet::new())),
+    }
+}
 
 /// Authenticated request context inserted into axum request extensions.
 #[derive(Debug, Clone)]
