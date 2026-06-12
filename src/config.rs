@@ -286,7 +286,11 @@ impl RawConfig {
         let development_default_scopes = self
             .auth
             .development_default_scopes
-            .map(|list| list.iter().filter_map(|scope| Scope::from_wire(scope)).collect())
+            .map(|list| {
+                list.iter()
+                    .filter_map(|scope| Scope::from_wire(scope))
+                    .collect()
+            })
             .unwrap_or_default();
 
         let capture_default_pattern = match self.daily_note.capture_default_pattern.as_str() {
@@ -323,15 +327,23 @@ impl RawConfig {
                 watcher_polling: self.index.watcher_polling,
                 ignored_globs: self.index.ignored_globs,
             },
-            writes: WritesConfig { cooldown_seconds: self.writes.cooldown_seconds },
+            writes: WritesConfig {
+                cooldown_seconds: self.writes.cooldown_seconds,
+            },
             audit: AuditConfig {
                 retention_max_rows: self.audit.retention_max_rows.unwrap_or(0),
                 archive_path: self.audit.archive_path,
             },
             framework: FrameworkConfig { schema_path },
-            daily_note: DailyNoteConfig { capture_default_pattern },
-            ocr: OcrConfig { enabled: self.ocr.enabled },
-            logging: LoggingConfig { log_args: self.logging.log_args },
+            daily_note: DailyNoteConfig {
+                capture_default_pattern,
+            },
+            ocr: OcrConfig {
+                enabled: self.ocr.enabled,
+            },
+            logging: LoggingConfig {
+                log_args: self.logging.log_args,
+            },
         })
     }
 }
@@ -357,7 +369,9 @@ fn invalid(message: &str) -> ConfigError {
 
 fn non_empty(value: String, name: &str) -> Result<String, ConfigError> {
     if value.is_empty() {
-        return Err(ConfigError::Invalid(format!("{name} must be a non-empty string")));
+        return Err(ConfigError::Invalid(format!(
+            "{name} must be a non-empty string"
+        )));
     }
     Ok(value)
 }
@@ -366,7 +380,9 @@ fn parse_http_url(value: &str, name: &str) -> Result<Url, ConfigError> {
     let parsed = Url::parse(value)
         .map_err(|_| ConfigError::Invalid(format!("{name} must be a valid http(s) URL")))?;
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
-        return Err(ConfigError::Invalid(format!("{name} must be a valid http(s) URL")));
+        return Err(ConfigError::Invalid(format!(
+            "{name} must be a valid http(s) URL"
+        )));
     }
     Ok(parsed)
 }
@@ -439,8 +455,7 @@ log_args = false
 
 #[cfg(test)]
 mod tests {
-    use super::tests_support::MINIMAL;
-    use super::*;
+    use super::{tests_support::MINIMAL, *};
 
     #[test]
     fn parses_minimal_config_with_defaults() {
@@ -452,7 +467,10 @@ mod tests {
         assert_eq!(cfg.audit.retention_max_rows, 0);
         assert_eq!(cfg.framework.schema_path, "_meta/framework.yaml");
         assert!(!cfg.ocr.enabled);
-        assert_eq!(cfg.daily_note.capture_default_pattern, CaptureDefaultPattern::B);
+        assert_eq!(
+            cfg.daily_note.capture_default_pattern,
+            CaptureDefaultPattern::B
+        );
     }
 
     #[test]

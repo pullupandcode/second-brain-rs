@@ -38,7 +38,9 @@ impl Scope {
     /// Parse a single scope token; unknown tokens return `None`.
     #[must_use]
     pub fn from_wire(token: &str) -> Option<Self> {
-        KNOWN_SCOPES.into_iter().find(|scope| scope.as_str() == token)
+        KNOWN_SCOPES
+            .into_iter()
+            .find(|scope| scope.as_str() == token)
     }
 }
 
@@ -54,7 +56,10 @@ pub const KNOWN_SCOPES: [Scope; 5] = [
 /// Parse a whitespace-separated scope claim, dropping unknown tokens.
 #[must_use]
 pub fn parse_scopes(claim: &str) -> HashSet<Scope> {
-    claim.split_whitespace().filter_map(Scope::from_wire).collect()
+    claim
+        .split_whitespace()
+        .filter_map(Scope::from_wire)
+        .collect()
 }
 
 #[cfg(test)]
