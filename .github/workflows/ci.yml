@@ -16,12 +16,14 @@ jobs:
         with:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
+      # Nightly is installed last and becomes the default toolchain, so pin
+      # clippy/test to stable explicitly; nightly is only for rustfmt.
       - name: fmt
         run: cargo +nightly fmt --all -- --check
       - name: clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo +stable clippy --all-targets --all-features -- -D warnings
       - name: test
-        run: cargo test --all-features
+        run: cargo +stable test --all-features
 
   supply-chain:
     runs-on: ubuntu-latest
