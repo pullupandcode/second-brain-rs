@@ -1,0 +1,63 @@
+[package]
+name = "second-brain-rs"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+description = "Framework-aware Second Brain vault MCP server over Streamable HTTP"
+repository = "https://github.com/pullupandcode/second-brain-rs"
+readme = "README.md"
+
+[lib]
+name = "second_brain_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "second-brain-rs"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["set-header"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+url = "2"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+rmcp = { version = "1.7.0", features = ["server", "transport-streamable-http-server", "macros"] }
+
+[dev-dependencies]
+tempfile = "3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# Conflicts with rustc `unreachable_pub`; we prefer explicit `pub(crate)`.
+redundant_pub_crate = "allow"
+indexing_slicing = "deny"
+wildcard_enum_match_arm = "deny"
+fn_params_excessive_bools = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+mem_forget = "deny"
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+missing_docs = "warn"
