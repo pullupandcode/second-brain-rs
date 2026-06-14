@@ -10,3 +10,4 @@ pub mod http;
 pub mod mcp;
 pub mod observability;
 pub mod tools;
+pub mod vault;
