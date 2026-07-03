@@ -23,6 +23,9 @@ tower-http = { version = "0.6", features = ["set-header"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "fs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+regex = "1"
+sha2 = "0.10"
+hex = "0.4"
 toml = "0.8"
 url = "2"
 thiserror = "2"
@@ -33,6 +36,7 @@ rmcp = { version = "1.7.0", features = ["server", "transport-streamable-http-ser
 
 [dev-dependencies]
 tempfile = "3"
+proptest = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [lints.clippy]
