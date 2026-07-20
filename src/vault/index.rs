@@ -8,6 +8,7 @@
 use std::sync::Mutex;
 
 use rusqlite::{Connection, params};
+use serde::Serialize;
 
 use crate::vault::policy::path_matches_any_pattern;
 
@@ -80,7 +81,8 @@ pub struct SearchFilters {
 }
 
 /// A search hit.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct SearchResult {
     /// Vault-relative path.
@@ -96,7 +98,7 @@ pub struct SearchResult {
 }
 
 /// Active sync-conflict grouping.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct VaultConflict {
     /// Canonical path.

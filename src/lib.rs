@@ -9,5 +9,6 @@ pub mod config;
 pub mod http;
 pub mod mcp;
 pub mod observability;
+pub mod runtime;
 pub mod tools;
 pub mod vault;

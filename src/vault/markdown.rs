@@ -21,7 +21,8 @@ pub enum FrontmatterValue {
 }
 
 /// The parsed view of a markdown note.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct ParsedMarkdown {
     /// Frontmatter key/value pairs (in key order).

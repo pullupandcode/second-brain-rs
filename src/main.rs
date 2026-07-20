@@ -9,6 +9,7 @@ use second_brain_rs::{
     http::{AppState, build_router},
     mcp::SecondBrainHandler,
     observability::init_tracing,
+    runtime::Runtime,
 };
 
 #[tokio::main]
@@ -33,9 +34,13 @@ fn parse_config_arg() -> Option<String> {
 async fn serve(config: ServerConfig) -> anyhow::Result<()> {
     let listen = config.listen.clone();
     let authenticator = build_authenticator(&config);
-    let handler = SecondBrainHandler::new(&config);
+    let config = Arc::new(config);
+    let runtime = Runtime::create(Arc::clone(&config))
+        .await
+        .context("failed to build runtime")?;
+    let handler = SecondBrainHandler::new(config.as_ref(), runtime);
     let state = AppState {
-        config: Arc::new(config),
+        config,
         authenticator,
         handler,
     };

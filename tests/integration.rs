@@ -12,6 +12,7 @@ use second_brain_rs::{
     config::parse_config,
     http::{AppState, build_router},
     mcp::SecondBrainHandler,
+    runtime::Runtime,
 };
 
 const CONFIG: &str = r#"
@@ -28,6 +29,7 @@ discovery_authorization_server = "https://idp.example.com/o/sb/"
 jwks_cache_ttl_seconds = 3600
 
 [index]
+sqlite_path = ":memory:"
 watcher_polling = false
 ignored_globs = ["**/.DS_Store"]
 
@@ -42,10 +44,11 @@ log_args = false
 "#;
 
 async fn spawn() -> String {
-    let config = parse_config(CONFIG).unwrap();
-    let handler = SecondBrainHandler::new(&config);
+    let config = Arc::new(parse_config(CONFIG).unwrap());
+    let runtime = Runtime::create(Arc::clone(&config)).await.unwrap();
+    let handler = SecondBrainHandler::new(config.as_ref(), runtime);
     let state = AppState {
-        config: Arc::new(config),
+        config,
         authenticator: Arc::new(DevAuthenticator::new(HashSet::new())),
         handler,
     };

@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::vault::{
@@ -32,7 +33,8 @@ pub enum VaultReaderError {
 }
 
 /// A single filesystem entry kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum EntryKind {
     /// A markdown file.
@@ -42,17 +44,19 @@ pub enum EntryKind {
 }
 
 /// A folder listing entry.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub struct FolderEntry {
     /// Vault-relative path.
     pub path: String,
     /// Entry kind.
+    #[serde(rename = "type")]
     pub kind: EntryKind,
 }
 
 /// A note read result.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct ReadNoteResult {
     /// Vault-relative (normalized) path.
