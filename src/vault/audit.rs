@@ -1,0 +1,166 @@
+//! Append-only write provenance and recoverable lifecycle records.
+#![allow(clippy::significant_drop_tightening)]
+use std::{
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
+
+use rusqlite::{Connection, params};
+use serde::Serialize;
+use serde_json::{Value, json};
+
+/// Persistence failures; filesystem details are never exposed to clients.
+#[derive(Debug, thiserror::Error)]
+pub enum AuditError {
+    /// Database operation failed.
+    #[error("audit database error")]
+    Database(#[from] rusqlite::Error),
+    /// Filesystem operation failed.
+    #[error("audit filesystem error")]
+    Io(#[from] std::io::Error),
+    /// Background task failed.
+    #[error("audit task error")]
+    Join(#[from] tokio::task::JoinError),
+}
+/// Provenance for a write attempt. Note content is deliberately excluded.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditInput {
+    /// Primitive operation name.
+    pub operation: String,
+    /// Vault-relative target.
+    pub path: String,
+    /// Expected old content hash.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_sha256: Option<String>,
+    /// Non-content operation metadata.
+    pub metadata: Value,
+}
+/// SQLite-backed append-only audit store. Use from blocking worker threads.
+#[derive(Debug)]
+pub struct VaultWriteAuditStore {
+    db: Mutex<Connection>,
+}
+impl VaultWriteAuditStore {
+    /// Open or initialize a durable audit database.
+    /// # Errors
+    /// Returns an error if SQLite cannot open or initialize the database.
+    pub fn open(path: &Path) -> Result<Self, AuditError> {
+        let db = Connection::open(path)?;
+        db.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;
+CREATE TABLE IF NOT EXISTS write_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,operation TEXT NOT NULL CHECK(operation IN ('create_note','replace_note','update_frontmatter','replace_section_by_marker','delete_note','hard_delete_note')),path TEXT NOT NULL,base_sha256 TEXT,result_sha256 TEXT NOT NULL,metadata_json TEXT NOT NULL DEFAULT '{}',created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
+CREATE TABLE IF NOT EXISTS write_audit_attempts(id INTEGER PRIMARY KEY AUTOINCREMENT,attempt_id TEXT NOT NULL,event_type TEXT NOT NULL CHECK(event_type IN ('started','succeeded','failed')),operation TEXT CHECK(operation IN ('create_note','replace_note','update_frontmatter','replace_section_by_marker','delete_note','hard_delete_note')),path TEXT,base_sha256 TEXT,result_sha256 TEXT,error_message TEXT,metadata_json TEXT NOT NULL DEFAULT '{}',created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),CHECK((event_type='started' AND operation IS NOT NULL AND path IS NOT NULL) OR (event_type='succeeded' AND result_sha256 IS NOT NULL) OR (event_type='failed' AND error_message IS NOT NULL)));
+CREATE INDEX IF NOT EXISTS write_audit_attempts_attempt_id_idx ON write_audit_attempts(attempt_id);")?;
+        for table in ["write_audit", "write_audit_attempts"] {
+            for event in ["UPDATE", "DELETE"] {
+                db.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS {table}_no_{event} BEFORE {event} ON {table} BEGIN SELECT RAISE(ABORT,'{table} is append-only'); END;"))?;
+            }
+            db.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS {table}_no_existing_id_insert BEFORE INSERT ON {table} WHEN NEW.id IS NOT NULL AND EXISTS(SELECT 1 FROM {table} WHERE id=NEW.id) BEGIN SELECT RAISE(ABORT,'{table} is append-only'); END;"))?;
+        }
+        Ok(Self { db: Mutex::new(db) })
+    }
+    /// Persist a start event before a filesystem mutation.
+    /// # Errors
+    /// Returns a database error on persistence failure.
+    pub fn record_write_started(&self, input: &AuditInput) -> Result<String, AuditError> {
+        let id = unique_id();
+        let db = self
+            .db
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        db.execute("INSERT INTO write_audit_attempts(attempt_id,event_type,operation,path,base_sha256,metadata_json) VALUES(?,'started',?,?,?,?)",params![id,input.operation,input.path,input.base_sha256,input.metadata.to_string()])?;
+        Ok(id)
+    }
+    /// Persist a terminal success independently from successful-write provenance.
+    /// # Errors
+    /// Returns a database error on persistence failure.
+    pub fn record_write_succeeded(&self, id: &str, hash: &str) -> Result<(), AuditError> {
+        self.db.lock().unwrap_or_else(std::sync::PoisonError::into_inner).execute("INSERT INTO write_audit_attempts(attempt_id,event_type,result_sha256) VALUES(?,'succeeded',?)",params![id,hash])?;
+        Ok(())
+    }
+    /// Persist a failed attempt without creating a successful-write row.
+    /// # Errors
+    /// Returns a database error on persistence failure.
+    pub fn record_write_failed(&self, id: &str, message: &str) -> Result<(), AuditError> {
+        self.db.lock().unwrap_or_else(std::sync::PoisonError::into_inner).execute("INSERT INTO write_audit_attempts(attempt_id,event_type,error_message) VALUES(?,'failed',?)",params![id,message])?;
+        Ok(())
+    }
+    /// Persist hashes and metadata for a completed mutation.
+    /// # Errors
+    /// Returns a database error on persistence failure.
+    pub fn record_write(&self, input: &AuditInput, hash: &str) -> Result<(), AuditError> {
+        self.db.lock().unwrap_or_else(std::sync::PoisonError::into_inner).execute("INSERT INTO write_audit(operation,path,base_sha256,result_sha256,metadata_json) VALUES(?,?,?,?,?)",params![input.operation,input.path,input.base_sha256,hash,input.metadata.to_string()])?;
+        Ok(())
+    }
+    /// Return incomplete lifecycle starts, newest first, with a bounded limit.
+    /// # Errors
+    /// Returns a database error if the query fails.
+    pub fn list_incomplete_writes(&self, limit: Option<i64>) -> Result<Vec<Value>, AuditError> {
+        let db = self
+            .db
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut stmt=db.prepare("SELECT attempt_id,operation,path,base_sha256,metadata_json,created_at FROM write_audit_attempts s WHERE event_type='started' AND NOT EXISTS(SELECT 1 FROM write_audit_attempts t WHERE t.attempt_id=s.attempt_id AND t.event_type IN ('succeeded','failed')) ORDER BY id DESC LIMIT ?")?;
+        let rows=stmt.query_map([limit.unwrap_or(100).clamp(1,1000)],|r|{let base:Option<String>=r.get(3)?;let raw:String=r.get(4)?;let mut v=json!({"attemptId":r.get::<_,String>(0)?,"operation":r.get::<_,String>(1)?,"path":r.get::<_,String>(2)?,"metadata":serde_json::from_str::<Value>(&raw).unwrap_or(json!({})),"startedAt":r.get::<_,String>(5)?});if let Some(base)=base{v["baseSha256"]=json!(base);}Ok(v)})?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+    /// Return successful writes, newest first, with a bounded limit.
+    /// # Errors
+    /// Returns a database error if the query fails.
+    pub fn list_recent_writes(&self, limit: Option<i64>) -> Result<Vec<Value>, AuditError> {
+        let db = self
+            .db
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut stmt=db.prepare("SELECT id,operation,path,base_sha256,result_sha256,metadata_json,created_at FROM write_audit ORDER BY id DESC LIMIT ?")?;
+        let rows=stmt.query_map([limit.unwrap_or(100).clamp(1,1000)],|r|{let base:Option<String>=r.get(3)?;let raw:String=r.get(5)?;let mut v=json!({"id":r.get::<_,i64>(0)?,"operation":r.get::<_,String>(1)?,"path":r.get::<_,String>(2)?,"resultSha256":r.get::<_,String>(4)?,"metadata":serde_json::from_str::<Value>(&raw).unwrap_or(json!({})),"createdAt":r.get::<_,String>(6)?});if let Some(base)=base{v["baseSha256"]=json!(base);}Ok(v)})?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+}
+/// Rotate before opening the live store when successful rows exceed retention.
+/// Returns the archive path when rotation occurs.
+/// # Errors
+/// Returns database, filesystem, or background-task failures.
+// NOT cancel-safe: filesystem rename may complete before cancellation is observed.
+pub async fn rotate_write_audit_if_needed(
+    path: &Path,
+    archive: &Path,
+    max_rows: u64,
+) -> Result<Option<PathBuf>, AuditError> {
+    if max_rows == 0 || path == Path::new(":memory:") || !tokio::fs::try_exists(path).await? {
+        return Ok(None);
+    }
+    let owned = path.to_path_buf();
+    let count = tokio::task::spawn_blocking(move || -> Result<i64, rusqlite::Error> {
+        let db = Connection::open(owned)?;
+        Ok(db
+            .query_row("SELECT count(*) FROM write_audit", [], |r| r.get(0))
+            .unwrap_or(0))
+    })
+    .await??;
+    if u64::try_from(count).unwrap_or(0) <= max_rows {
+        return Ok(None);
+    }
+    tokio::fs::create_dir_all(archive).await?;
+    let destination = archive.join(format!(
+        "write-audit.{}.sqlite",
+        archive_timestamp(time::OffsetDateTime::now_utc())
+    ));
+    tokio::fs::rename(path, &destination).await?;
+    Ok(Some(destination))
+}
+pub(crate) fn unique_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+fn archive_timestamp(now: time::OffsetDateTime) -> String {
+    format!(
+        "{:04}{:02}{:02}T{:02}{:02}{:02}{:03}Z",
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second(),
+        now.millisecond()
+    )
+}

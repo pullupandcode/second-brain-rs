@@ -238,6 +238,13 @@ impl ServerHandler for SecondBrainHandler {
                     )),
                     ToolCallResult::Error,
                 ),
+                Err(DispatchError::Write(error)) => (
+                    Err(ErrorData::invalid_params(
+                        error.to_string(),
+                        serde_json::to_value(&error).ok(),
+                    )),
+                    ToolCallResult::Error,
+                ),
                 Err(DispatchError::Internal(message)) => (
                     Err(ErrorData::internal_error(
                         {

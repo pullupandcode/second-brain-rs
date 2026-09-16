@@ -11,10 +11,12 @@ use crate::{
     config::ServerConfig,
     skills::{LoadedSkill, SkillLoad, load_skills},
     vault::{
+        audit::{VaultWriteAuditStore, rotate_write_audit_if_needed},
         index::{ConflictPair, NoteRecord, SearchFilters, VaultIndex, canonical_conflict_path},
         path::is_markdown_path,
         policy::PathPolicy,
         reader::{VaultReader, VaultReaderOptions},
+        writer::{VaultWriter, VaultWriterOptions},
     },
 };
 
@@ -31,6 +33,9 @@ pub enum RuntimeError {
     /// Index error.
     #[error("runtime index error")]
     Index(#[from] crate::vault::index::IndexError),
+    /// Audit initialization failed.
+    #[error("runtime audit error")]
+    Audit(#[from] crate::vault::audit::AuditError),
     /// A blocking task failed to join.
     #[error("runtime task error")]
     Join(#[from] tokio::task::JoinError),
@@ -57,6 +62,9 @@ pub enum DispatchError {
         /// Sanitized client-facing message.
         message: String,
     },
+    /// Classified filesystem mutation failure.
+    #[error("{0}")]
+    Write(#[from] crate::vault::writer::VaultWriteError),
     /// Internal failure (message is sanitized before reaching the client).
     #[error("{0}")]
     Internal(String),
@@ -71,6 +79,8 @@ pub struct Runtime {
     skills: tokio::sync::RwLock<SkillLoad>,
     skill_reload: tokio::sync::Mutex<()>,
     ocr: crate::ocr::OcrQueue,
+    writer: Arc<VaultWriter>,
+    audit: Arc<VaultWriteAuditStore>,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -118,6 +128,27 @@ impl Runtime {
         .await??;
         let index = Arc::new(index);
 
+        let audit_path = Path::new(&config.state_path).join("write-audit.sqlite");
+        let archive_path = config.audit.archive_path.as_ref().map_or_else(
+            || Path::new(&config.state_path).join("audit-archive"),
+            PathBuf::from,
+        );
+        rotate_write_audit_if_needed(&audit_path, &archive_path, config.audit.retention_max_rows)
+            .await?;
+        let audit = Arc::new(
+            tokio::task::spawn_blocking(move || VaultWriteAuditStore::open(&audit_path)).await??,
+        );
+        let conflicts = scan_conflicts(Path::new(&config.vault_path), &policy).await?;
+        let writer = Arc::new(VaultWriter::new(
+            VaultWriterOptions {
+                vault_root: PathBuf::from(&config.vault_path),
+                cooldown_seconds: config.writes.cooldown_seconds,
+                blocked_paths: policy.clone(),
+                quarantined_paths: conflicts.into_iter().map(|pair| pair.canonical).collect(),
+                trash_path: config.deletes.trash_path.clone(),
+            },
+            Some(Arc::clone(&audit)),
+        ));
         let runtime = Arc::new(Self {
             config,
             reader,
@@ -126,6 +157,8 @@ impl Runtime {
             skills: tokio::sync::RwLock::new(skills),
             skill_reload: tokio::sync::Mutex::new(()),
             ocr: crate::ocr::OcrQueue::default(),
+            writer,
+            audit,
         });
         runtime.cold_rebuild().await?;
         Ok(runtime)
@@ -160,6 +193,12 @@ impl Runtime {
         self.policy.replace(paths);
         *snapshot = load;
         Ok(json!({"mapPaths": self.config.skills.map_paths, "skills": snapshot.statuses}))
+    }
+
+    /// Shared audited writer for framework, record, and daily-note mutations.
+    #[must_use]
+    pub fn writer(&self) -> Arc<VaultWriter> {
+        Arc::clone(&self.writer)
     }
 
     async fn cold_rebuild(&self) -> Result<(), RuntimeError> {
@@ -201,6 +240,21 @@ impl Runtime {
             "ocr_notebook" | "ocr_status" | "ocr_renumber_notebook" if self.config.ocr.enabled => {
                 self.ocr.dispatch(name, args)
             }
+            "create_note"
+            | "replace_note"
+            | "update_frontmatter"
+            | "replace_section_by_marker"
+            | "delete_note"
+            | "hard_delete_note" => self.write_tool(name, args).await,
+            "list_write_recovery_diagnostics" => {
+                let audit = Arc::clone(&self.audit);
+                let incomplete =
+                    tokio::task::spawn_blocking(move || audit.list_incomplete_writes(None))
+                        .await
+                        .map_err(|_| DispatchError::Internal("audit task error".into()))?
+                        .map_err(|_| DispatchError::Internal("audit database error".into()))?;
+                Ok(json!({"incompleteWrites":incomplete}))
+            }
             "read_note" => self.read_note(args).await,
             "list_folder" => self.list_folder(args).await,
             "search" => self.search(args).await,
@@ -213,6 +267,72 @@ impl Runtime {
             _ if is_known_later_tool(name) => Err(DispatchError::NotImplemented),
             other => Err(DispatchError::UnknownTool(other.to_owned())),
         }
+    }
+
+    async fn write_tool(
+        &self,
+        name: &str,
+        args: &Map<String, Value>,
+    ) -> Result<Value, DispatchError> {
+        let path = require_string(args, "path")?;
+        let result = match name {
+            "create_note" => {
+                self.writer
+                    .create_note(
+                        &path,
+                        &require_text(args, "content")?,
+                        frontmatter_arg(args, "frontmatter")?.as_ref(),
+                    )
+                    .await?
+            }
+            "replace_note" => {
+                self.writer
+                    .replace_note(
+                        &path,
+                        &require_text(args, "content")?,
+                        &require_string(args, "base_sha256")?,
+                        frontmatter_arg(args, "frontmatter")?.as_ref(),
+                    )
+                    .await?
+            }
+            "update_frontmatter" => {
+                self.writer
+                    .update_frontmatter(
+                        &path,
+                        &frontmatter_arg(args, "patch")?.ok_or_else(|| {
+                            DispatchError::Invalid("patch must be an object".into())
+                        })?,
+                        &require_string(args, "base_sha256")?,
+                    )
+                    .await?
+            }
+            "replace_section_by_marker" => {
+                self.writer
+                    .replace_section_by_marker(
+                        &path,
+                        &require_string(args, "marker_name")?,
+                        &require_text(args, "content")?,
+                        &require_string(args, "base_sha256")?,
+                    )
+                    .await?
+            }
+            "delete_note" => {
+                self.writer
+                    .delete_note(&path, &require_string(args, "base_sha256")?)
+                    .await?
+            }
+            "hard_delete_note" => {
+                self.writer
+                    .hard_delete_note(&path, &require_string(args, "base_sha256")?)
+                    .await?
+            }
+            _ => return Err(DispatchError::UnknownTool(name.into())),
+        };
+        // A completed filesystem mutation remains successful even if rebuilding fails.
+        if let Err(error) = self.cold_rebuild().await {
+            tracing::error!(%error,"index refresh after write failed");
+        }
+        to_value(&result)
     }
 
     async fn read_note(&self, args: &Map<String, Value>) -> Result<Value, DispatchError> {
@@ -570,11 +690,60 @@ mod tests {
         ));
         assert!(matches!(
             runtime.dispatch("create_note", &empty).await,
-            Err(DispatchError::NotImplemented)
+            Err(DispatchError::Invalid(_))
         ));
         assert!(matches!(
             runtime.dispatch("nope", &empty).await,
             Err(DispatchError::UnknownTool(_))
         ));
     }
+}
+
+fn require_text(args: &Map<String, Value>, key: &str) -> Result<String, DispatchError> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| DispatchError::Invalid(format!("{key} must be a string")))
+}
+fn frontmatter_arg(
+    args: &Map<String, Value>,
+    key: &str,
+) -> Result<
+    Option<std::collections::BTreeMap<String, crate::vault::markdown::FrontmatterValue>>,
+    DispatchError,
+> {
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+    let map = value
+        .as_object()
+        .ok_or_else(|| DispatchError::Invalid(format!("{key} must be an object")))?;
+    let mut result = std::collections::BTreeMap::new();
+    for (name, value) in map {
+        use crate::vault::markdown::FrontmatterValue as F;
+        let parsed = match value {
+            Value::String(v) => F::String(v.clone()),
+            Value::Bool(v) => F::Bool(*v),
+            Value::Number(v) => F::Number(
+                v.as_f64()
+                    .ok_or_else(|| DispatchError::Invalid("invalid frontmatter number".into()))?,
+            ),
+            Value::Array(v) => F::List(
+                v.iter()
+                    .map(|v| {
+                        v.as_str().map(str::to_owned).ok_or_else(|| {
+                            DispatchError::Invalid("frontmatter arrays must contain strings".into())
+                        })
+                    })
+                    .collect::<Result<_, _>>()?,
+            ),
+            Value::Null | Value::Object(_) => {
+                return Err(DispatchError::Invalid(
+                    "unsupported frontmatter value".into(),
+                ));
+            }
+        };
+        result.insert(name.clone(), parsed);
+    }
+    Ok(Some(result))
 }
