@@ -60,7 +60,7 @@ mod tests {
         let meta = build_protected_resource_metadata(&config());
         assert_eq!(meta.resource, "http://127.0.0.1:3000");
         assert_eq!(meta.bearer_methods_supported, vec!["header"]);
-        assert_eq!(meta.scopes_supported.len(), 5);
+        assert_eq!(meta.scopes_supported.len(), 8);
         assert_eq!(
             meta.scopes_supported.first().map(String::as_str),
             Some("vault:read")

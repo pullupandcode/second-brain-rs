@@ -1,20 +1,24 @@
 //! rmcp server handler: advertises scope-filtered tools and dispatches calls.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, Content, ListToolsResult, PaginatedRequestParams,
-        ServerCapabilities, ServerInfo, Tool,
+        CallToolRequestParams, CallToolResult, Content, GetPromptRequestParams, GetPromptResult,
+        ListPromptsResult, ListToolsResult, PaginatedRequestParams, Prompt, PromptMessage,
+        PromptMessageRole, ServerCapabilities, ServerInfo, Tool,
     },
     service::RequestContext,
 };
-use serde_json::Value;
+use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::{
-    auth::AuthContext,
+    auth::{AuthContext, scopes::Scope},
     config::ServerConfig,
+    observability::{OperationalLogEntry, ToolCallResult, log_operational},
+    runtime::{DispatchError, Runtime},
     tools::registry::{
         ToolDefinition, create_tool_registry, input_schema_for_tool, list_tools_for_scopes,
     },
@@ -28,6 +32,7 @@ pub struct SecondBrainHandler {
 
 struct HandlerState {
     tools: Vec<ToolDefinition>,
+    runtime: Arc<Runtime>,
 }
 
 impl std::fmt::Debug for SecondBrainHandler {
@@ -37,12 +42,13 @@ impl std::fmt::Debug for SecondBrainHandler {
 }
 
 impl SecondBrainHandler {
-    /// Build the handler from config (tool set depends on the OCR flag).
+    /// Build the handler from config and runtime (tool set depends on OCR flag).
     #[must_use]
-    pub fn new(config: &ServerConfig) -> Self {
+    pub fn new(config: &ServerConfig, runtime: Arc<Runtime>) -> Self {
         Self {
             inner: Arc::new(HandlerState {
                 tools: create_tool_registry(config.ocr.enabled),
+                runtime,
             }),
         }
     }
@@ -96,26 +102,88 @@ fn tool_to_rmcp(name: &'static str, description: &'static str, schema: Value) ->
 
 impl ServerHandler for SecondBrainHandler {
     fn get_info(&self) -> ServerInfo {
-        // `ServerInfo::new` populates `server_info` from the crate env
-        // (name = "second-brain-rs", version from Cargo.toml).
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_prompts()
+                .build(),
+        )
+        .with_server_info(rmcp::model::Implementation::new(
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_PKG_VERSION"),
+        ))
     }
 
-    async fn list_tools(
+    fn initialize(
+        &self,
+        request: rmcp::model::InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ServerInfo, ErrorData>> + Send {
+        let info = self
+            .get_info()
+            .with_protocol_version(request.protocol_version.clone());
+        if context.peer.peer_info().is_none() {
+            context.peer.set_peer_info(request);
+        }
+        std::future::ready(Ok(info))
+    }
+
+    fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, ErrorData> {
-        let tools = context
-            .extensions
-            .get::<AuthContext>()
-            .map_or_else(Vec::new, |auth| {
-                self.visible_tools(auth)
-                    .into_iter()
-                    .map(|(name, description, schema)| tool_to_rmcp(name, description, schema))
-                    .collect()
-            });
-        Ok(ListToolsResult::with_all_items(tools))
+    ) -> impl Future<Output = Result<ListToolsResult, ErrorData>> + Send {
+        let tools = request_auth(&context).map_or_else(Vec::new, |auth| {
+            self.visible_tools(auth)
+                .into_iter()
+                .map(|(name, description, schema)| tool_to_rmcp(name, description, schema))
+                .collect()
+        });
+        std::future::ready(Ok(ListToolsResult::with_all_items(tools)))
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, ErrorData> {
+        if !request_auth(&context).is_some_and(|auth| auth.scopes.contains(&Scope::SkillsRead)) {
+            return Err(forbidden_scope());
+        }
+        let prompts = self
+            .inner
+            .runtime
+            .loaded_skills()
+            .await
+            .into_iter()
+            .map(|skill| Prompt::new(skill.name, Some(skill.description), None))
+            .collect();
+        Ok(ListPromptsResult::with_all_items(prompts))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResult, ErrorData> {
+        if !request_auth(&context).is_some_and(|auth| auth.scopes.contains(&Scope::SkillsRead)) {
+            return Err(forbidden_scope());
+        }
+        let skill = self
+            .inner
+            .runtime
+            .loaded_skills()
+            .await
+            .into_iter()
+            .find(|skill| skill.name == request.name)
+            .ok_or_else(|| {
+                ErrorData::new(rmcp::model::ErrorCode(-32601), "Method not found", None)
+            })?;
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            skill.content,
+        )])
+        .with_description(skill.description))
     }
 
     async fn call_tool(
@@ -123,24 +191,113 @@ impl ServerHandler for SecondBrainHandler {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        let name = request.name.as_ref();
-        let access = context
-            .extensions
-            .get::<AuthContext>()
-            .map_or(ToolAccess::Forbidden, |auth| self.tool_allowed(auth, name));
+        let started = Instant::now();
+        let name = request.name.to_string();
+        let auth = request_auth(&context);
+        let (subject, client_id) = auth.map_or_else(
+            || ("anonymous".to_owned(), None),
+            |auth| (auth.subject.clone(), auth.client_id.clone()),
+        );
+        let access = auth.map_or(ToolAccess::Forbidden, |auth| self.tool_allowed(auth, &name));
+        let args: Map<String, Value> = request.arguments.clone().unwrap_or_default();
 
-        match access {
-            ToolAccess::Unknown => Err(ErrorData::invalid_params(
-                format!("unknown tool: {name}"),
-                None,
-            )),
-            ToolAccess::Forbidden => Err(ErrorData::invalid_request("forbidden_scope", None)),
-            // Real dispatch arrives in Phases 2-4; Phase 1 confirms routing + scope.
-            ToolAccess::Allowed => Ok(CallToolResult::success(vec![Content::text(
-                "not_implemented",
-            )])),
-        }
+        let (result, outcome) = match access {
+            ToolAccess::Unknown => (
+                Err(ErrorData::new(
+                    rmcp::model::ErrorCode(-32601),
+                    "Method not found",
+                    None,
+                )),
+                ToolCallResult::Error,
+            ),
+            ToolAccess::Forbidden => (Err(forbidden_scope()), ToolCallResult::ForbiddenScope),
+            ToolAccess::Allowed => match self.inner.runtime.dispatch(&name, &args).await {
+                Ok(value) => (Ok(structured_result(&value)), ToolCallResult::Ok),
+                Err(DispatchError::NotImplemented) => (
+                    Ok(CallToolResult::error(vec![Content::text(
+                        "not_implemented",
+                    )])),
+                    ToolCallResult::Error,
+                ),
+                Err(DispatchError::UnknownTool(_tool)) => (
+                    Err(ErrorData::new(
+                        rmcp::model::ErrorCode(-32601),
+                        "Method not found",
+                        None,
+                    )),
+                    ToolCallResult::Error,
+                ),
+                Err(DispatchError::Invalid(message)) => (
+                    Err(ErrorData::invalid_params(message, None)),
+                    ToolCallResult::Error,
+                ),
+                Err(DispatchError::Coded { code, message }) => (
+                    Err(ErrorData::invalid_params(
+                        message,
+                        Some(json!({"code": code})),
+                    )),
+                    ToolCallResult::Error,
+                ),
+                Err(DispatchError::Internal(message)) => (
+                    Err(ErrorData::internal_error(
+                        {
+                            tracing::error!(%message, "tool failed");
+                            "Internal tool error"
+                        },
+                        None,
+                    )),
+                    ToolCallResult::Error,
+                ),
+            },
+        };
+
+        log_operational(&OperationalLogEntry {
+            ts: now_rfc3339(),
+            sub: subject,
+            client_id,
+            tool: name,
+            args_hash: hash_args(&args),
+            result: outcome,
+            duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        });
+        result
     }
+}
+
+fn request_auth(context: &RequestContext<RoleServer>) -> Option<&AuthContext> {
+    context
+        .extensions
+        .get::<axum::http::request::Parts>()
+        .and_then(|parts| parts.extensions.get::<AuthContext>())
+}
+
+fn forbidden_scope() -> ErrorData {
+    ErrorData::new(rmcp::model::ErrorCode(-32003), "forbidden_scope", None)
+}
+
+fn structured_result(value: &Value) -> CallToolResult {
+    let mut result = CallToolResult::success(vec![Content::text(value.to_string())]);
+    let structured = if value.is_object() {
+        value.clone()
+    } else {
+        json!({ "result": value })
+    };
+    result.structured_content = Some(structured);
+    result
+}
+
+fn hash_args(args: &Map<String, Value>) -> String {
+    let serialized = serde_json::to_string(args).unwrap_or_default();
+    format!(
+        "sha256:{}",
+        hex::encode(Sha256::digest(serialized.as_bytes()))
+    )
+}
+
+fn now_rfc3339() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -148,13 +305,25 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
-    use crate::{
-        auth::scopes::Scope,
-        config::{parse_config, tests_support::MINIMAL},
-    };
+    use crate::{auth::scopes::Scope, config::parse_config};
 
-    fn handler() -> SecondBrainHandler {
-        SecondBrainHandler::new(&parse_config(MINIMAL).unwrap())
+    async fn handler() -> SecondBrainHandler {
+        let dir = tempfile::tempdir().unwrap();
+        let toml = format!(
+            "listen = \"127.0.0.1:0\"\npublic_base_url = \"http://127.0.0.1:3000\"\n\
+             vault_path = \"{path}\"\nstate_path = \"{path}\"\n\
+             [auth]\nmode = \"development\"\naudience = \"a\"\n\
+             trusted_issuers = [\"https://i.example.com/\"]\n\
+             discovery_authorization_server = \"https://i.example.com/\"\n\
+             jwks_cache_ttl_seconds = 60\n\
+             [index]\nsqlite_path = \":memory:\"\nwatcher_polling = false\nignored_globs = []\n\
+             [writes]\ncooldown_seconds = 0\n[daily_note]\ncapture_default_pattern = \"B\"\n\
+             [logging]\nlog_args = false\n",
+            path = dir.path().display()
+        );
+        let config = Arc::new(parse_config(&toml).unwrap());
+        let runtime = Runtime::create(Arc::clone(&config)).await.unwrap();
+        SecondBrainHandler::new(&config, runtime)
     }
 
     fn ctx(scopes: &[Scope]) -> AuthContext {
@@ -165,9 +334,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn list_filters_by_scope() {
-        let handler = handler();
+    #[tokio::test]
+    async fn list_filters_by_scope() {
+        let handler = handler().await;
         let names: HashSet<_> = handler
             .visible_tools(&ctx(&[Scope::VaultRead]))
             .into_iter()
@@ -177,9 +346,9 @@ mod tests {
         assert!(!names.contains("create_note"));
     }
 
-    #[test]
-    fn tool_access_enforces_scope() {
-        let handler = handler();
+    #[tokio::test]
+    async fn tool_access_enforces_scope() {
+        let handler = handler().await;
         assert_eq!(
             handler.tool_allowed(&ctx(&[Scope::VaultRead]), "read_note"),
             ToolAccess::Allowed

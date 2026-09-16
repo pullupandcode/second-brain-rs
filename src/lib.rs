@@ -9,4 +9,12 @@ pub mod config;
 pub mod http;
 pub mod mcp;
 pub mod observability;
+pub mod runtime;
 pub mod tools;
+pub mod vault;
+
+/// Vault-backed skill prompts.
+pub mod skills;
+
+/// In-memory OCR job contract.
+pub mod ocr;

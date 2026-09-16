@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use url::Url;
 
-use crate::auth::scopes::Scope;
+use crate::{auth::scopes::Scope, vault::path::normalize_vault_path};
 
 /// Capture default pattern. `A` = inline daily append; `B` = dated capture records.
 #[non_exhaustive]
@@ -65,6 +65,26 @@ pub struct ServerConfig {
     pub ocr: OcrConfig,
     /// Logging settings.
     pub logging: LoggingConfig,
+    /// Vault skill maps.
+    pub skills: SkillsConfig,
+    /// Security policy settings.
+    pub security: SecurityConfig,
+}
+
+/// Vault-backed prompt configuration.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct SkillsConfig {
+    /// Normalized vault-relative skill maps.
+    pub map_paths: Vec<String>,
+}
+
+/// Security policy configuration.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct SecurityConfig {
+    /// Hard denylist: paths blocked from all read/write/search operations.
+    pub blocked_paths: Vec<String>,
 }
 
 /// Auth configuration.
@@ -97,6 +117,8 @@ pub struct IndexConfig {
     pub watcher_polling: bool,
     /// Globs excluded from indexing.
     pub ignored_globs: Vec<String>,
+    /// Paths softly excluded from the index and listings (not write-blocking).
+    pub blocked_paths: Vec<String>,
 }
 
 /// Write configuration.
@@ -204,6 +226,22 @@ struct RawConfig {
     #[serde(default)]
     ocr: RawOcr,
     logging: RawLogging,
+    #[serde(default)]
+    security: RawSecurity,
+    #[serde(default)]
+    skills: RawSkills,
+}
+
+#[derive(Deserialize, Default)]
+struct RawSkills {
+    #[serde(default)]
+    map_paths: Vec<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct RawSecurity {
+    #[serde(default)]
+    blocked_paths: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -222,6 +260,8 @@ struct RawIndex {
     sqlite_path: Option<String>,
     watcher_polling: bool,
     ignored_globs: Vec<String>,
+    #[serde(default)]
+    blocked_paths: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -299,6 +339,11 @@ impl RawConfig {
             _ => return Err(invalid("daily_note.capture_default_pattern must be A or B")),
         };
 
+        let index_blocked_paths =
+            normalize_path_list(&self.index.blocked_paths, "index.blocked_paths")?;
+        let security_blocked_paths =
+            normalize_path_list(&self.security.blocked_paths, "security.blocked_paths")?;
+
         let sqlite_path = self
             .index
             .sqlite_path
@@ -326,6 +371,7 @@ impl RawConfig {
                 sqlite_path,
                 watcher_polling: self.index.watcher_polling,
                 ignored_globs: self.index.ignored_globs,
+                blocked_paths: index_blocked_paths,
             },
             writes: WritesConfig {
                 cooldown_seconds: self.writes.cooldown_seconds,
@@ -344,8 +390,24 @@ impl RawConfig {
             logging: LoggingConfig {
                 log_args: self.logging.log_args,
             },
+            skills: SkillsConfig {
+                map_paths: normalize_path_list(&self.skills.map_paths, "skills.map_paths")?,
+            },
+            security: SecurityConfig {
+                blocked_paths: security_blocked_paths,
+            },
         })
     }
+}
+
+fn normalize_path_list(values: &[String], key: &str) -> Result<Vec<String>, ConfigError> {
+    values
+        .iter()
+        .map(|value| {
+            normalize_vault_path(value)
+                .map_err(|error| ConfigError::Invalid(format!("{key}: {error}")))
+        })
+        .collect()
 }
 
 fn read_jwt_algorithms(value: Option<Vec<String>>) -> Result<Vec<JwtAlgorithm>, ConfigError> {
@@ -490,6 +552,36 @@ mod tests {
             r#"capture_default_pattern = "C""#,
         );
         assert!(parse_config(&src).is_err());
+    }
+
+    #[test]
+    fn blocked_paths_default_empty() {
+        let cfg = parse_config(MINIMAL).unwrap();
+        assert!(cfg.security.blocked_paths.is_empty());
+        assert!(cfg.index.blocked_paths.is_empty());
+    }
+
+    #[test]
+    fn blocked_paths_parsed_and_normalized() {
+        let src =
+            format!("{MINIMAL}\n[security]\nblocked_paths = [\"Private\\\\Secret\", \"a/./b\"]\n");
+        // index.blocked_paths goes under the existing [index] table.
+        let with_index = MINIMAL.replace(
+            "watcher_polling = false",
+            "watcher_polling = false\nblocked_paths = [\"cache/x\"]",
+        );
+        let cfg = parse_config(&with_index).unwrap();
+        assert_eq!(cfg.index.blocked_paths, vec!["cache/x"]);
+
+        let cfg = parse_config(&src).unwrap();
+        assert_eq!(cfg.security.blocked_paths, vec!["Private/Secret", "a/b"]);
+    }
+
+    #[test]
+    fn rejects_traversal_in_blocked_paths() {
+        let src = format!("{MINIMAL}\n[security]\nblocked_paths = [\"../escape\"]\n");
+        let err = parse_config(&src).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(msg) if msg.contains("security.blocked_paths")));
     }
 
     #[test]

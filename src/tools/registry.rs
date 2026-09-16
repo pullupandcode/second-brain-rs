@@ -50,22 +50,32 @@ const fn ocr_tool(name: &'static str, description: &'static str) -> ToolDefiniti
     }
 }
 
-/// The 27 always-present tools.
+/// The 31 always-present tools.
 pub static BASE_TOOLS: &[ToolDefinition] = &[
     tool(
         "read_note",
         Scope::VaultRead,
-        "Read note content plus parsed frontmatter.",
+        "Read content plus parsed frontmatter.",
     ),
     tool(
         "create_note",
         Scope::VaultWrite,
-        "Create a note; fail if the path exists.",
+        "Create a note and fail if the path exists.",
     ),
     tool(
         "replace_note",
         Scope::VaultWrite,
-        "Replace a full note with optimistic concurrency.",
+        "Replace a full note body with optimistic concurrency.",
+    ),
+    tool(
+        "delete_note",
+        Scope::VaultDelete,
+        "Move a note into the configured MCP trash path.",
+    ),
+    tool(
+        "hard_delete_note",
+        Scope::VaultDeleteHard,
+        "Remove a note from disk with optimistic concurrency.",
     ),
     tool(
         "list_folder",
@@ -81,7 +91,7 @@ pub static BASE_TOOLS: &[ToolDefinition] = &[
     tool(
         "get_outgoing_links",
         Scope::VaultRead,
-        "List links from a note.",
+        "List links from a path.",
     ),
     tool(
         "update_frontmatter",
@@ -148,6 +158,16 @@ pub static BASE_TOOLS: &[ToolDefinition] = &[
         "list_write_recovery_diagnostics",
         Scope::Admin,
         "List write attempts without terminal audit events.",
+    ),
+    tool(
+        "skills_list",
+        Scope::Admin,
+        "List configured in-vault skill load diagnostics.",
+    ),
+    tool(
+        "skills_reload",
+        Scope::Admin,
+        "Reload configured in-vault skills from skills maps.",
     ),
     tool(
         "framework_init",
@@ -238,6 +258,10 @@ pub fn input_schema_for_tool(name: &str) -> Value {
                 "base_sha256": string_prop("Current note SHA-256 for optimistic concurrency."),
                 "frontmatter": object_prop("Optional replacement frontmatter fields.")
             }),
+        ),
+        "delete_note" | "hard_delete_note" => object(
+            &["path", "base_sha256"],
+            json!({"path": string_prop("Vault-relative markdown path."), "base_sha256": string_prop("Current note SHA-256 for optimistic concurrency.")}),
         ),
         "list_folder" => object(
             &["path"],
@@ -416,13 +440,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn base_registry_has_27_tools() {
-        assert_eq!(create_tool_registry(false).len(), 27);
+    fn base_registry_has_31_tools() {
+        assert_eq!(create_tool_registry(false).len(), 31);
     }
 
     #[test]
     fn ocr_tools_added_only_when_enabled() {
-        assert_eq!(create_tool_registry(true).len(), 30);
+        assert_eq!(create_tool_registry(true).len(), 34);
         assert!(
             create_tool_registry(false)
                 .iter()
