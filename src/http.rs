@@ -164,13 +164,15 @@ async fn preflight(request: axum::extract::Request) -> Result<PreflightRequest, 
     }
     if matches!(method, "tools/call" | "prompts/get")
         && (name.is_none_or(str::is_empty)
-            || message
-                .pointer("/params/arguments")
-                .is_some_and(|value| !value.is_object()))
+            || (method == "tools/call"
+                && message
+                    .pointer("/params/arguments")
+                    .is_some_and(|value| !value.is_object())))
     {
         return Err(rpc_error(StatusCode::OK, id, -32602, "Invalid params"));
     }
     let result = match method {
+        "initialize" => Some(initialize_result(&message)),
         "resources/list" => Some(json!({"resources":[]})),
         "resources/templates/list" => Some(json!({"resourceTemplates":[]})),
         "ping" => Some(json!({})),
@@ -187,15 +189,6 @@ async fn preflight(request: axum::extract::Request) -> Result<PreflightRequest, 
     ) {
         return Err(rpc_error(StatusCode::OK, id, -32601, "Method not found"));
     }
-    // The reference accepts JSON regardless of Content-Type/Accept; normalize for rmcp.
-    parts.headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    parts.headers.insert(
-        header::ACCEPT,
-        HeaderValue::from_static("application/json, text/event-stream"),
-    );
     // rmcp only accepts i64/string IDs. The reference accepts every finite JSON
     // number. This mapping is local to one stateless HTTP request, never a session.
     let original_numeric_id = id
@@ -206,12 +199,64 @@ async fn preflight(request: axum::extract::Request) -> Result<PreflightRequest, 
     {
         object.insert("id".to_owned(), Value::String(format!("number:{id}")));
     }
-    parts.headers.remove(header::CONTENT_LENGTH);
+    normalize_method_params(&mut message);
+    normalize_transport_headers(&mut parts.headers);
     let body = Body::from(message.to_string());
     Ok(PreflightRequest {
         request: axum::extract::Request::from_parts(parts, body),
         original_numeric_id,
     })
+}
+
+// The reference accepts JSON regardless of Content-Type/Accept; normalize for rmcp.
+fn normalize_transport_headers(headers: &mut HeaderMap) {
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        header::ACCEPT,
+        HeaderValue::from_static("application/json, text/event-stream"),
+    );
+    headers.remove(header::CONTENT_LENGTH);
+}
+
+// The reference reads only protocolVersion; initialization needs no auth or
+// client capability payload and accepts unknown nonempty protocol versions.
+fn initialize_result(message: &serde_json::Value) -> serde_json::Value {
+    let protocol = message
+        .pointer("/params/protocolVersion")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("2025-03-26");
+    serde_json::json!({
+        "protocolVersion": protocol,
+        "capabilities": {"tools":{},"prompts":{}},
+        "serverInfo": {"name":env!("CARGO_PKG_NAME"),"version":env!("CARGO_PKG_VERSION")}
+    })
+}
+
+// Strip fields the reference ignores before rmcp's stricter typed decoding.
+// Header binding and method-specific validation have already inspected the
+// original request. Tool argument objects remain intact for runtime validation.
+fn normalize_method_params(message: &mut serde_json::Value) {
+    use serde_json::{Value, json};
+    let params = match message.get("method").and_then(Value::as_str) {
+        Some("tools/list" | "prompts/list") => None,
+        Some("prompts/get") => Some(json!({"name":message.pointer("/params/name")})),
+        Some("tools/call") => Some(json!({
+            "name":message.pointer("/params/name"),
+            "arguments":message.pointer("/params/arguments").cloned().unwrap_or_else(||json!({}))
+        })),
+        _ => return,
+    };
+    if let Some(object) = message.as_object_mut() {
+        if let Some(params) = params {
+            object.insert("params".to_owned(), params);
+        } else {
+            object.remove("params");
+        }
+    }
 }
 
 // JSON.parse represents every number as binary64. Preserve its rounded value,

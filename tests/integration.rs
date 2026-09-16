@@ -914,22 +914,29 @@ async fn hard_denies_normalize_unicode_across_reads_and_skill_reload() {
 }
 
 async fn raw_mcp(router: &axum::Router, body: String) -> Value {
+    raw_mcp_with_authorization(router, body, true).await
+}
+
+async fn raw_mcp_with_authorization(
+    router: &axum::Router,
+    body: String,
+    authorized: bool,
+) -> Value {
     use axum::{
         body::{Body, to_bytes},
         http::Request,
     };
     use tower::ServiceExt;
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("host", "localhost");
+    if authorized {
+        request = request.header("authorization", "Bearer scope=admin vault:read skills:read");
+    }
     let response = router
         .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/mcp")
-                .header("host", "localhost")
-                .header("authorization", "Bearer scope=admin vault:read")
-                .body(Body::from(body))
-                .unwrap(),
-        )
+        .oneshot(request.body(Body::from(body)).unwrap())
         .await
         .unwrap();
     let status = response.status();
@@ -1054,4 +1061,98 @@ async fn raw_json_numbers_match_javascript_integer_precision() {
         status["result"]["structuredContent"]["input"]["pages"],
         json!([1, 9_007_199_254_740_992_u64])
     );
+}
+
+#[tokio::test]
+async fn ignored_list_params_do_not_change_results() {
+    let (_dir, router) = ocr_router().await;
+    for method in ["tools/list", "prompts/list"] {
+        let baseline = raw_mcp(
+            &router,
+            json!({"jsonrpc":"2.0","id":1,"method":method}).to_string(),
+        )
+        .await;
+        for params in [
+            Value::Null,
+            json!(42),
+            json!(true),
+            json!("text"),
+            json!([]),
+            json!({}),
+            json!({"cursor":42,"_meta":false}),
+        ] {
+            for id in [json!(1), json!(1.5)] {
+                let response = raw_mcp(
+                    &router,
+                    json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}).to_string(),
+                )
+                .await;
+                assert_eq!(response["id"], id);
+                assert_eq!(response["result"], baseline["result"], "{method}: {params}");
+                assert!(response.get("error").is_none());
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn initialize_accepts_reference_params_and_defaults() {
+    let (_dir, router) = ocr_router().await;
+    let absent = raw_mcp_with_authorization(
+        &router,
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize"}).to_string(),
+        false,
+    )
+    .await;
+    assert_eq!(absent["result"]["protocolVersion"], "2025-03-26");
+    for (params, expected) in [
+        (Value::Null, "2025-03-26"),
+        (json!(42), "2025-03-26"),
+        (json!(true), "2025-03-26"),
+        (json!([]), "2025-03-26"),
+        (json!({}), "2025-03-26"),
+        (json!({"protocolVersion":""}), "2025-03-26"),
+        (json!({"protocolVersion":42}), "2025-03-26"),
+        (
+            json!({"protocolVersion":"custom","clientInfo":false,"capabilities":42}),
+            "custom",
+        ),
+    ] {
+        for id in [json!(1), json!(1.5)] {
+            let response = raw_mcp_with_authorization(
+                &router,
+                json!({"jsonrpc":"2.0","id":id,"method":"initialize","params":params}).to_string(),
+                false,
+            )
+            .await;
+            assert_eq!(response["id"], id);
+            assert_eq!(response["result"]["protocolVersion"], expected, "{params}");
+            assert_eq!(
+                response["result"]["serverInfo"]["name"],
+                env!("CARGO_PKG_NAME")
+            );
+            assert_eq!(
+                response["result"]["serverInfo"]["version"],
+                env!("CARGO_PKG_VERSION")
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn call_params_ignore_reference_extra_fields() {
+    let (_dir, router) = ocr_router().await;
+    for method in ["tools/call", "prompts/get"] {
+        let mut params = json!({"name":"missing","_meta":42});
+        if method == "prompts/get" {
+            params["arguments"] = json!(42);
+        }
+        let response = raw_mcp(
+            &router,
+            json!({"jsonrpc":"2.0","id":1.5,"method":method,"params":params}).to_string(),
+        )
+        .await;
+        assert_eq!(response["id"], 1.5);
+        assert_eq!(response["error"]["code"], -32601);
+    }
 }

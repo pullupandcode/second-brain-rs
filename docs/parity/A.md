@@ -178,3 +178,23 @@ integer controls, positive/negative 2^53+1, u64::MAX, signed zero, and OCR integ
 arguments. RED on the pre-normalization adapter returned 9007199254740993 instead
 of 9007199254740992; GREEN rounds it like JSON.parse.
 Receipts: `/private/tmp/parity-admin/a-json-integer-{red,green}.log`.
+
+## Method parameter tolerance (independent review regression)
+
+The reference HTTP dispatcher accepts initialize with absent, null, scalar, array,
+or incomplete params: it uses a nonempty protocolVersion string or defaults to
+2025-03-26, without authentication. The preflight now returns this handshake with
+the Rust package identity. Tools/list and prompts/list ignore params entirely.
+Before rmcp decoding, tools/call retains only the validated name and optional
+object arguments, while prompts/get retains only its validated name. Unused
+cursor, _meta, capability, client-info and prompt argument fields therefore do not
+cause SDK deserialization errors. Header/name binding still checks the original
+request first; tool argument validation and scope authorization remain in place.
+
+Three regression tests failed on the preceding adapter (initialize missing result,
+list/call HTTP415) and pass after normalization. They cover absent/null/scalar/
+array/object params, protocol fallback/echo, unauthenticated initialization,
+ignored metadata, numeric/string-compatible IDs and scoped lists. Raw receipts:
+`/private/tmp/parity-admin/a-params-{red,green}.log`. The four numeric boundary
+regressions remain green (`a-params-numeric-green.log`). Independent review's
+240-case matrix covers the same method/parameter boundary without extending scope.

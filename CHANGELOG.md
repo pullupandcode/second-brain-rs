@@ -8,6 +8,8 @@
 - Authenticate every protected MCP request and forward its context; expose
   structured tool results, scope failures, prompts, bounded JSON parsing and
   request/header consistency checks over stateless HTTP.
+- Match reference initialization defaults and ignore unused method parameters
+  before SDK decoding, preserving header binding and scoped dispatch.
 - Complete 31 base/34 optional-OCR tool schemas and eight-scope discovery.
 - Load/reload vault skill maps, admin diagnostics and separately scoped prompts;
   share privacy policy across readers/index and future writers, including aliases.
