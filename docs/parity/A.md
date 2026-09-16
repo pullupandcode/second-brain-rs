@@ -77,3 +77,33 @@ implements `UnwindSafe`/`RefUnwindSafe`; and inserting the three added scopes
 changes Rust enum discriminants. OAuth wire strings are stable. These changes
 are released as 0.2.0, never as a 0.1.x patch; downstream Rust integrations must
 construct a runtime and must not persist numeric Scope discriminants.
+
+
+## Configured hard-deny case aliases (review regression)
+
+The reviewer reproduced `Private/**` failing to protect an actual lowercase
+`private` directory on a case-insensitive filesystem. Canonicalizing existing
+paths alone cannot protect differently cased configured patterns or not-yet-created
+prefixes. PathPolicy now compiles its hard-deny patterns with anchored Unicode
+case-insensitive matching, using the existing regex dependency. It retains the
+same supported glob subset and original spelling in snapshots. New rules compile
+before atomic replacement so every shared reader, index query and future writer
+sees the same policy after skill reload. A regex compilation failure fails closed.
+The generic case-sensitive matcher used by soft ignored globs is unchanged.
+
+This is intentional stricter security behavior than the pinned reference: even
+on a case-sensitive filesystem, a deny also protects differently cased distinct
+paths. Ordinary path identity, write-lock identity and index identity are not
+case-normalized. Unicode simple case folding includes variants such as sigma;
+this change does not introduce arbitrary Unicode normalization of path identity.
+
+RED on predecessor `ffe4a0ac7bd93a7f30d335787e70209b5fb71b4e` with only new tests:
+`hard_denies_ignore_case_in_existing_and_future_paths` missed private/secret.md;
+`hard_denies_cover_configured_case_aliases_and_skill_reload` missed a future path.
+Both tests passed after implementation. The integration test exercises configured
+case-mismatched read/list/search denial, shared future-write-path policy, and
+reloading a previously indexed public skill into private prompt state.
+Raw receipts: `/private/tmp/parity-admin/a-case-policy-red.log`,
+`a-case-integration-red.log`, `a-case-policy-green.log`, and
+`a-case-integration-green.log` (same directory). Final full-suite receipts are
+maintained by the coordinator for the reviewed head.

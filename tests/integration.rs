@@ -712,3 +712,107 @@ async fn malformed_search_filters_never_broaden_results() {
         );
     }
 }
+
+#[tokio::test]
+async fn hard_denies_cover_configured_case_aliases_and_skill_reload() {
+    let (dir, config) = fixture().await;
+    let vault = dir.path().join("vault");
+    tokio::fs::create_dir(vault.join("restricted"))
+        .await
+        .unwrap();
+    tokio::fs::write(vault.join("restricted/secret.md"), "# Hidden\ncasecanary")
+        .await
+        .unwrap();
+    tokio::fs::write(vault.join("SkillMap.md"), "# Initially empty")
+        .await
+        .unwrap();
+    tokio::fs::write(
+        vault.join("CaseSkill.md"),
+        "---\nname: case-skill\ndescription: Private after reload\n---\nskillcanary",
+    )
+    .await
+    .unwrap();
+    let mut config = (*config).clone();
+    config
+        .security
+        .blocked_paths
+        .extend(["ReStricted/**".to_owned(), "Future/**".to_owned()]);
+    config.skills.map_paths = vec!["SkillMap.md".to_owned()];
+    let runtime = Runtime::create(Arc::new(config)).await.unwrap();
+    let policy = runtime.path_policy();
+    let before = runtime
+        .dispatch("search", &args(json!({"query":"skillcanary"})))
+        .await
+        .unwrap();
+    assert_eq!(before.as_array().unwrap().len(), 1);
+    for reload in [false, true] {
+        if reload {
+            tokio::fs::write(vault.join("SkillMap.md"), "[[CaseSkill]]")
+                .await
+                .unwrap();
+            runtime
+                .dispatch("skills_reload", &Map::new())
+                .await
+                .unwrap();
+            assert_eq!(runtime.loaded_skills().await.len(), 1);
+            assert!(policy.is_blocked("caseskill.MD"));
+            assert!(
+                runtime
+                    .dispatch("read_note", &args(json!({"path":"CaseSkill.md"})))
+                    .await
+                    .is_err()
+            );
+            assert!(
+                runtime
+                    .dispatch("search", &args(json!({"query":"skillcanary"})))
+                    .await
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        assert!(
+            policy.is_blocked("future/missing/new.md"),
+            "new write paths must stay blocked"
+        );
+        assert!(
+            runtime
+                .dispatch("read_note", &args(json!({"path":"restricted/secret.md"})))
+                .await
+                .is_err()
+        );
+        assert!(
+            runtime
+                .dispatch("list_folder", &args(json!({"path":"restricted"})))
+                .await
+                .is_err()
+        );
+        let listing = runtime
+            .dispatch("list_folder", &args(json!({"path":"", "recursive":true})))
+            .await
+            .unwrap();
+        assert!(
+            !listing
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["path"].as_str().unwrap().starts_with("restricted/"))
+        );
+        assert!(
+            runtime
+                .dispatch("search", &args(json!({"query":"casecanary"})))
+                .await
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            runtime
+                .dispatch("read_note", &args(json!({"path":"Notes/apple.md"})))
+                .await
+                .is_ok()
+        );
+    }
+}

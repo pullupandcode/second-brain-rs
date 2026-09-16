@@ -42,7 +42,11 @@ Configure `[skills] map_paths = ["Maps/Skills.md"]` to load linked notes with
 frontmatter `name` (lowercase slug, at most 64 characters) and `description`, plus
 nonempty body content. Maps support wikilinks, relative Markdown links, and
 `Path:` hints. Loaded and invalid candidates, configured maps, and their existing
-canonical targets are private to ordinary vault access. Admin diagnostics omit
+canonical targets are private to ordinary vault access. Hard-deny patterns use
+Unicode case-insensitive matching on every platform, including prefixes that do
+not yet exist. This deliberately also blocks differently cased distinct paths on
+case-sensitive filesystems. Ordinary path identity, search identity and soft
+ignored-glob matching retain their original case-sensitive behavior. Admin diagnostics omit
 skill bodies; prompts require the separate `skills:read` scope. Reload replaces
 skills and the shared privacy policy without restart. Previously private notes
 remain absent from the startup index until restart even after being unloaded.
