@@ -53,8 +53,9 @@ The property test covers valid frontmatter scalars and body preservation.
 
 ## Integrated candidate
 
-The B commits are rebased onto approved A head
-`ffe4a0ac7bd93a7f30d335787e70209b5fb71b4e` pending its squash merge. Runtime,
+The B commits are rebased onto A's actual squash merge
+`2b6dcf1c2a6cf0278a363691d57a9c20d51811cb` from PR #51, published as immutable
+[v0.2.0](https://github.com/pullupandcode/second-brain-rs/releases/tag/v0.2.0). Runtime,
 reader, index and writer share A's reloadable PathPolicy. Existing OCR coded
 errors, MCP request authentication, prompts and exact eight-scope registry are
 preserved. The three added HTTP tests exercise primitive write roundtrips,
@@ -68,9 +69,12 @@ Runtime::create, and invalid input errors without creating files or successful
 audit rows. String/list serialization tests cover escaped quotes, backslashes,
 newlines and embedded commas against A's parser.
 
-The final rebase onto A's actual squash commit remains necessary before merging B.
-Both independent reviewers must approve the resulting exact head, and required
-CI must pass. C consumes Runtime::writer() for audited framework mutations.
+The squash rebase preserves the previously reviewed implementation tree. All 110
+tests, formatting, strict Clippy, cargo-deny and cargo-audit pass after the rebase.
+The forced-patch semver diagnostic remains the documented Runtime unwind-safety
+change for 0.3.0. Both independent reviewers must approve the latest exact head,
+and required CI and GitHub reviews must pass before merging B. C consumes
+Runtime::writer() for audited framework mutations.
 
 ## Standalone draft checks (2026-09-16)
 
