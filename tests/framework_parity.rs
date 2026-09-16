@@ -933,3 +933,113 @@ async fn metadata_guards_existing_and_new_paths_on_case_insensitive_filesystems(
     );
     assert!(!dir.path().join("vault/Private/new.yaml").exists());
 }
+
+#[tokio::test]
+async fn ordered_framework_lists_use_reference_english_collation() {
+    let (dir, runtime) = fixture().await;
+    let vault = dir.path().join("vault");
+    tokio::fs::create_dir_all(vault.join("_meta"))
+        .await
+        .unwrap();
+    tokio::fs::write(vault.join("_meta/framework.yaml"), "version: 1\nschema_kind: base\ntypes:\n  beta:\n    folder: Maps\n  Alpha:\n    folder: Maps\n  alpha:\n    folder: Maps\n  Zulu:\n    folder: Maps\n").await.unwrap();
+    let names: Vec<_> = call(&runtime, "list_record_types", json!({})).await["recordTypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, ["alpha", "Alpha", "beta", "Zulu"]);
+    tokio::fs::write(
+        vault.join("_meta/overlay.yaml"),
+        "version: 1\nschema_kind: overlay\ntypes: {}\n",
+    )
+    .await
+    .unwrap();
+    for name in ["beta", "Alpha", "alpha", "Zulu", "éclair"] {
+        call(
+            &runtime,
+            "framework_register",
+            json!({"name":name,"path":"_meta/overlay.yaml","priority":if name == "beta" { -0.0 } else { 0.0 }}),
+        )
+        .await;
+    }
+    let overlays = call(&runtime, "framework_list", json!({})).await;
+    let names: Vec<_> = overlays
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["alpha", "Alpha", "beta", "éclair", "Zulu"]);
+    for name in ["Zulu", "alpha", "Beta", "éclair"] {
+        call(
+            &runtime,
+            "create_note",
+            json!({"path":format!("Maps/{name}.md"),"content":format!("# {name}")}),
+        )
+        .await;
+        tokio::fs::create_dir_all(vault.join(name)).await.unwrap();
+    }
+    let maps = call(&runtime, "find_maps", json!({})).await;
+    let paths: Vec<_> = maps["maps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "Maps/alpha.md",
+            "Maps/Beta.md",
+            "Maps/éclair.md",
+            "Maps/Zulu.md"
+        ]
+    );
+    let structure = call(&runtime, "get_vault_structure", json!({})).await;
+    let paths: Vec<_> = structure["folders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["path"].as_str().unwrap())
+        .filter(|p| ["Zulu", "alpha", "Beta", "éclair"].contains(p))
+        .collect();
+    assert_eq!(paths, ["alpha", "Beta", "éclair", "Zulu"]);
+}
+
+#[tokio::test]
+async fn iso_normalization_is_shared_by_records_captures_and_daily_notes() {
+    let (_dir, runtime) = fixture().await;
+    call(&runtime, "framework_init", json!({"framework":"lyt"})).await;
+    for (tool, args, date) in [
+        (
+            "create_record",
+            json!({"type":"capture","title":"Record","body":"content","date":"2026-02-30T00:00:00Z"}),
+            "2026-03-02",
+        ),
+        (
+            "capture_for_date",
+            json!({"title":"Capture","content":"content","source_client":"test","date":"2026-09"}),
+            "2026-09-01",
+        ),
+        (
+            "inbox_capture",
+            json!({"title":"Inbox","content":"content","source_client":"test","date":"2026-01-01T24:00Z"}),
+            "2026-01-02",
+        ),
+    ] {
+        let written = call(&runtime, tool, args).await;
+        let note = call(&runtime, "read_note", json!({"path":written["path"]})).await;
+        assert!(
+            note["content"].as_str().unwrap().contains(date),
+            "{tool}: {note}"
+        );
+    }
+    let daily = call(
+        &runtime,
+        "daily_note_get",
+        json!({"date":"2026-02-30T00:00:00Z"}),
+    )
+    .await;
+    assert_eq!(daily["path"], "Calendar/Days/2026-03-02.md");
+}

@@ -1,6 +1,7 @@
 //! Framework schema composition and vault workflows.
 
 mod daily;
+mod dates;
 mod metadata;
 mod records;
 mod schema;
@@ -86,7 +87,7 @@ impl Framework {
     // cancel-safe: reads only.
     pub(crate) async fn record_types(&self) -> Result<Vec<Value>, DispatchError> {
         let schema = self.compose().await?;
-        Ok(schema
+        let mut types: Vec<Value> = schema
             .get("types")
             .and_then(Value::as_object)
             .into_iter()
@@ -104,7 +105,15 @@ impl Framework {
                 }
                 Value::Object(item)
             })
-            .collect())
+            .collect();
+        let collator = collator()?;
+        types.sort_by(|left, right| {
+            collator.compare(
+                left.get("name").and_then(Value::as_str).unwrap_or(""),
+                right.get("name").and_then(Value::as_str).unwrap_or(""),
+            )
+        });
+        Ok(types)
     }
 
     // cancel-safe: reads only, no in-memory cached schema to partially update.
@@ -180,7 +189,7 @@ impl Framework {
             ("path".into(), json!(path)),
             ("priority".into(), json!(priority)),
         ]));
-        sort_registrations(&mut entries);
+        sort_registrations(&mut entries)?;
         self.save_registrations(&entries).await?;
         Ok(Value::Array(
             entries
@@ -234,7 +243,7 @@ impl Framework {
                 ("priority".into(), json!(priority)),
             ]));
         }
-        sort_registrations(&mut entries);
+        sort_registrations(&mut entries)?;
         Ok(entries)
     }
 
@@ -323,7 +332,7 @@ impl Framework {
             }
         }
         let index = Arc::clone(&self.index);
-        let maps = tokio::task::spawn_blocking(move || {
+        let mut maps = tokio::task::spawn_blocking(move || {
             let mut maps = BTreeMap::new();
             for folder in folders {
                 for result in index.search(
@@ -341,22 +350,36 @@ impl Framework {
         .await
         .map_err(|_| invalid("Index task failed"))?
         .map_err(|_| invalid("Index query failed"))?;
+        let collator = collator()?;
+        maps.sort_by(|left, right| collator.compare(&left.path, &right.path));
         Ok(json!({"maps":maps}))
     }
 }
 
-fn sort_registrations(entries: &mut [Map<String, Value>]) {
+pub(crate) fn collator() -> Result<icu_collator::CollatorBorrowed<'static>, DispatchError> {
+    icu_collator::Collator::try_new(
+        icu_locale_core::locale!("en-US").into(),
+        icu_collator::options::CollatorOptions::default(),
+    )
+    .map_err(|error| invalid(format!("Collation data unavailable: {error}")))
+}
+
+fn sort_registrations(entries: &mut [Map<String, Value>]) -> Result<(), DispatchError> {
+    let collator = collator()?;
     entries.sort_by(|a, b| {
         a.get("priority")
             .and_then(Value::as_f64)
             .unwrap_or(0.0)
-            .total_cmp(&b.get("priority").and_then(Value::as_f64).unwrap_or(0.0))
+            .partial_cmp(&b.get("priority").and_then(Value::as_f64).unwrap_or(0.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| {
-                a.get("name")
-                    .and_then(Value::as_str)
-                    .cmp(&b.get("name").and_then(Value::as_str))
+                collator.compare(
+                    a.get("name").and_then(Value::as_str).unwrap_or(""),
+                    b.get("name").and_then(Value::as_str).unwrap_or(""),
+                )
             })
     });
+    Ok(())
 }
 fn read_priority(value: &Value, name: &str) -> Result<Value, DispatchError> {
     if value

@@ -3,8 +3,9 @@
 use std::collections::BTreeMap;
 
 use serde_json::{Map, Value, json};
-use time::{Date, Month, OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
+use time::OffsetDateTime;
 
+pub(super) use super::dates::parse_date;
 use super::{
     Framework, frontmatter, invalid, is_missing, optional_string, read_error, string, write_error,
 };
@@ -156,7 +157,7 @@ impl Framework {
                 "Effective framework schema does not define a capture type",
             ));
         }
-        let input = json!({"type":"capture","title":title.unwrap_or("Capture"),"body":content,"date":date.format(&Rfc3339).map_err(|_|invalid("date must be a valid date"))?,"fields":fields});
+        let input = json!({"type":"capture","title":title.unwrap_or("Capture"),"body":content,"date":iso_string(date),"fields":fields});
         self.create_record(
             input
                 .as_object()
@@ -166,44 +167,28 @@ impl Framework {
     }
 }
 
-pub(super) fn parse_date(raw: Option<&str>) -> Result<OffsetDateTime, DispatchError> {
-    let Some(raw) = raw else {
-        return Ok(OffsetDateTime::now_utc());
-    };
-    if let Ok(date) = OffsetDateTime::parse(raw, &Rfc3339) {
-        return Ok(date.to_offset(UtcOffset::UTC));
-    }
-    let mut parts = raw.split('-');
-    if let (Some(year), Some(month), Some(day), None) =
-        (parts.next(), parts.next(), parts.next(), parts.next())
-    {
-        let date = year
-            .parse::<i32>()
-            .ok()
-            .zip(month.parse::<u8>().ok())
-            .zip(day.parse::<u8>().ok())
-            .and_then(|((y, m), d)| {
-                if !(1..=31).contains(&d) {
-                    return None;
-                }
-                Month::try_from(m)
-                    .ok()
-                    .and_then(|m| Date::from_calendar_date(y, m, 1).ok())
-                    .and_then(|first| first.checked_add(time::Duration::days(i64::from(d) - 1)))
-            });
-        if let Some(date) = date {
-            return Ok(date.midnight().assume_utc());
-        }
-    }
-    Err(invalid("date must be a valid date"))
-}
-
 pub(super) fn date_string(date: OffsetDateTime) -> String {
     format!(
-        "{:04}-{:02}-{:02}",
+        "{}-{:02}-{:02}",
         date.year(),
         u8::from(date.month()),
         date.day()
+    )
+}
+fn iso_string(date: OffsetDateTime) -> String {
+    let year = if date.year() < 0 {
+        format!("{:07}", date.year())
+    } else {
+        format!("{:04}", date.year())
+    };
+    format!(
+        "{year}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        u8::from(date.month()),
+        date.day(),
+        date.hour(),
+        date.minute(),
+        date.second(),
+        date.millisecond()
     )
 }
 fn expand_pattern(pattern: &str, title: &str, date: OffsetDateTime) -> String {
@@ -213,10 +198,10 @@ fn expand_pattern(pattern: &str, title: &str, date: OffsetDateTime) -> String {
         .collect();
     pattern
         .replace("{title}", title.trim())
-        .replace("{date:YYYY}", &format!("{:04}", date.year()))
+        .replace("{date:YYYY}", &date.year().to_string())
         .replace(
             "{date:YYYY-MM}",
-            &format!("{:04}-{:02}", date.year(), u8::from(date.month())),
+            &format!("{}-{:02}", date.year(), u8::from(date.month())),
         )
         .replace("{date:YYYY-MM-DD}", &date_string(date))
         .replace(
@@ -257,6 +242,8 @@ fn scheduled_date(date: OffsetDateTime, format: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use time::format_description::well_known::Rfc3339;
+
     use super::*;
 
     #[test]
@@ -286,5 +273,64 @@ mod tests {
         );
         assert!(parse_date(Some("2026-02-32")).is_err());
         assert!(parse_date(Some("2026-13-01")).is_err());
+    }
+    #[test]
+    fn iso_forms_and_time_overflow_follow_javascript() {
+        for (input, expected) in [
+            ("2026", "2026-01-01T00:00:00Z"),
+            ("2026-09", "2026-09-01T00:00:00Z"),
+            ("2026-02-30T00:00:00Z", "2026-03-02T00:00:00Z"),
+            ("2026-02-30T23:30-03:00", "2026-03-03T02:30:00Z"),
+            ("2026-01-01T24:00Z", "2026-01-02T00:00:00Z"),
+            ("2026-09T14:30Z", "2026-09-01T14:30:00Z"),
+            ("2026-01-01T12:30:00.1234Z", "2026-01-01T12:30:00.123Z"),
+            ("2026-01-01T12:30+0100", "2026-01-01T11:30:00Z"),
+        ] {
+            assert_eq!(
+                parse_date(Some(input)).unwrap().format(&Rfc3339).unwrap(),
+                expected,
+                "{input}"
+            );
+        }
+        for input in [
+            "2026-02-32T00:00Z",
+            "2026-13-01T00:00Z",
+            "2026-01-01T24:01Z",
+            "2026-01-01T24:00:00.0001Z",
+            "9999-12-31T23:00-23:00",
+            "2026-01-01T23:59:60Z",
+            "2026-01-01T12:00+24:00",
+        ] {
+            assert!(parse_date(Some(input)).is_err(), "{input}");
+        }
+    }
+
+    #[test]
+    fn early_and_negative_year_fields_match_reference_without_padding() {
+        for (raw, expected, iso) in [
+            ("0001-01-02", "1-01-02", "0001-01-02T00:00:00.000Z"),
+            ("-000001-01-02", "-1-01-02", "-000001-01-02T00:00:00.000Z"),
+        ] {
+            let date = parse_date(Some(raw)).unwrap();
+            assert_eq!(date_string(date), expected);
+            assert_eq!(iso_string(date), iso);
+            assert_eq!(parse_date(Some(&iso_string(date))).unwrap(), date);
+        }
+    }
+
+    #[test]
+    fn timezone_less_datetime_uses_system_timezone() {
+        let expected = jiff::civil::DateTime::new(2026, 9, 1, 14, 30, 0, 0)
+            .unwrap()
+            .to_zoned(jiff::tz::TimeZone::system())
+            .unwrap()
+            .timestamp()
+            .as_nanosecond();
+        assert_eq!(
+            parse_date(Some("2026-09-01T14:30:00"))
+                .unwrap()
+                .unix_timestamp_nanos(),
+            expected
+        );
     }
 }

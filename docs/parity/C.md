@@ -39,6 +39,22 @@ order rather than JavaScript insertion order. Parsed fields, note body content,
 and ordered list values retain equivalent semantics; byte-for-byte mapping key
 order is not claimed.
 
+Ordered record-type names, equal-priority registry names, map paths, and structure
+folder paths use ICU English (`en-US`) collation, matching the pinned Node
+process's default locale. The locale is fixed for reproducibility; deployments
+whose JavaScript process uses another default locale can produce a different
+order. Registry priorities `-0.0` and `0.0` compare equally before the name tie-break.
+
+Date inputs support ISO year/month/day defaults, timestamps with or without
+seconds, fractional seconds truncated to milliseconds, UTC/numeric offsets,
+24:00 rollover, and day overflow through day 31. Date-only inputs are UTC;
+timezone-less datetimes use the server's system timezone with JavaScript-compatible
+DST gap/overlap resolution. Filename/frontmatter years use the reference's
+unpadded numeric year. Compatibility limits remain: JavaScript's implementation-
+dependent legacy date strings (for example English or slash-separated dates) and
+years outside -9999 through 9999 are unsupported. Full unrestricted `Date.parse`
+compatibility is not claimed.
+
 Framework schemas, registries, templates, and note workflows enforce the shared
 effective privacy policy, including after skill reload and through canonical
 aliases. Raw metadata reads recheck policy after filesystem awaits. The
@@ -63,6 +79,8 @@ symlink components, use exclusive temporary files, and publish complete content.
 | Registry numbers | JSON `1.0` rejected as noninteger | Integral floats and large integer-valued numbers match reference acceptance and ordering |
 | YAML inline comments | Comment after an earlier literal hash remained in the value | Whitespace-prefixed comment is removed like the reference subset |
 | Metadata case aliases | `private/SCHEMA.yaml` overwrote an existing file under blocked `Private/**` | Canonical target/ancestor identity is checked; existing and new destinations under that folder are blocked |
+| Locale ordering | Independent HTTP QA returned `[Alpha,Zulu,alpha,beta]` instead of `[alpha,Alpha,beta,Zulu]` | ICU ordering covers mixed case and accented registry/map/structure paths; numeric zero ties preserve name ordering |
+| ISO timestamp forms | Independent QA rejected overflow timestamps, year-month and timezone-less datetimes | Shared parser accepts/normalizes these forms; local DST gap/overlap and invalid leap seconds are covered |
 | Existing structure test | Fixture had no schema and composition failed | Initialize schema, retain original privacy assertions, assert five record types |
 
 Additional regressions cover source-ID replacement and immediate indexing,
@@ -96,11 +114,15 @@ and `c-final-{deny,audit,semver}.log`. The canonical metadata regression ran on 
 case-insensitive development filesystem; it detects and returns early on systems
 where those alternative spellings refer to distinct files.
 
-The tested source candidate `9f21526` integrates approved protocol behavior and
-storage candidate `b64bc10`. A separate shared-policy review remains open for
-newly created, differently cased blocked subtrees without an existing canonical
-ancestor. Any resulting baseline fix must be inherited and rechecked before
-final approval. Rebase onto the actual A/B squash commits is still required once
-those merges are permitted. Independent code review and QA must approve the final SHA;
-new commits invalidate earlier approvals. No 0.4.0 tag or release is published by
-this branch, and no unmerged story is marked completed.
+The prior 121-test gate above predates the subsequent shared-policy and QA fixes.
+The candidate now inherits shared case-insensitive denies from A `05c9741` through
+B `a1690cc`, addressing nonexistent blocked prefixes as well as existing aliases.
+After the QA fixes, focused validation passes 11 framework library tests, 20
+framework runtime tests (HTTP excluded only in the local sandbox), and strict
+Clippy. Full HTTP/dependency/repository checks remain required for the new candidate.
+The reference QA failure log is `/private/tmp/parity-qa-c/results.log`.
+
+Rebase onto the actual A/B squash commits is still required once those merges are
+permitted. Independent code review and QA must approve the final SHA; new commits
+invalidate earlier approvals. No 0.4.0 tag or release is published by this branch,
+and no unmerged story is marked completed.

@@ -17,6 +17,9 @@ name = "second-brain-rs"
 path = "src/main.rs"
 
 [dependencies]
+icu_collator = "2.3.1"
+icu_locale_core = "2.3.0"
+jiff = "0.2.37"
 axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["set-header"] }

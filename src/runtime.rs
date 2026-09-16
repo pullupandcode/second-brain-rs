@@ -496,11 +496,13 @@ impl Runtime {
     }
 
     async fn get_vault_structure(&self) -> Result<Value, DispatchError> {
-        let entries = self
+        let mut entries = self
             .reader
             .list_folder("", false)
             .await
             .map_err(|error| self.reader_error(&error))?;
+        let collator = crate::framework::collator()?;
+        entries.sort_by(|left, right| collator.compare(&left.path, &right.path));
         let folders = to_value(&entries)?;
         Ok(json!({ "folders": folders, "recordTypes": self.framework.record_types().await? }))
     }
