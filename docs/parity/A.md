@@ -40,6 +40,10 @@ reference build's pure schema functions and tool names; it covers all 34 schemas
 - RED: malformed search tag/folder values were silently ignored and broadened
   results; GREEN after explicit object/string validation (an intentional stricter
   input contract than the reference unchecked filter properties).
+- RED: OCR rejected equivalent integer spellings such as 1.0 and 2e0; GREEN
+  after validating numeric integrality rather than the JSON lexical representation.
+  Negative page integers remain accepted as in the reference; fractions and
+  nonnumeric values are rejected. The reference defines no page min/max bounds.
 - Security dependencies checked centrally: cargo-deny/audit pass without waivers.
   Final validation commands and candidate head are recorded on the PR.
 

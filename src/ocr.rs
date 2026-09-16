@@ -35,9 +35,11 @@ impl OcrQueue {
             )]);
             if let Some(pages) = args.get("pages") {
                 if !pages.as_array().is_some_and(|values| {
-                    values
-                        .iter()
-                        .all(|v| v.as_i64().is_some() || v.as_u64().is_some())
+                    values.iter().all(|value| {
+                        value
+                            .as_f64()
+                            .is_some_and(|number| number.is_finite() && number.fract() == 0.0)
+                    })
                 }) {
                     return Err(DispatchError::Invalid(
                         "pages must be an array of integers".to_owned(),
@@ -75,4 +77,38 @@ fn required<'a>(args: &'a Map<String, Value>, key: &str) -> Result<&'a str, Disp
         .and_then(Value::as_str)
         .filter(|v| !v.is_empty())
         .ok_or_else(|| DispatchError::Invalid(format!("{key} must be a non-empty string")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pages_accept_equivalent_integer_number_spellings() {
+        let queue = OcrQueue::default();
+        let args: Map<String, Value> =
+            serde_json::from_str(r#"{"identifier":"n","pages":[1.0,2e0,-3.0]}"#).unwrap();
+        let job = queue.dispatch("ocr_notebook", &args).unwrap();
+        let status = queue
+            .dispatch(
+                "ocr_status",
+                &Map::from_iter([("job_id".to_owned(), job.get("job_id").unwrap().clone())]),
+            )
+            .unwrap();
+        let pages = status.pointer("/input/pages").unwrap().as_array().unwrap();
+        assert_eq!(
+            pages
+                .iter()
+                .map(|v| v.as_f64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![1.0, 2.0, -3.0]
+        );
+        for pages in [json!([1.5]), json!([true]), json!(["1"]), json!([null])] {
+            let args = Map::from_iter([
+                ("identifier".to_owned(), json!("n")),
+                ("pages".to_owned(), pages),
+            ]);
+            assert!(queue.dispatch("ocr_notebook", &args).is_err());
+        }
+    }
 }
