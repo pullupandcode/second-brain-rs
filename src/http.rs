@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::State,
-    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
+    extract::{ConnectInfo, State},
+    http::{HeaderName, HeaderValue, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
     routing::get,
@@ -40,12 +40,18 @@ impl std::fmt::Debug for AppState {
 /// Build the full axum router (aux routes + `/mcp` + middleware layers).
 pub fn build_router(state: AppState) -> Router {
     let handler = state.handler.clone();
+    let mut transport = StreamableHttpServerConfig::default()
+        .with_stateful_mode(false)
+        .with_json_response(true);
+    let public = &state.config.public_base_url;
+    if let Some(port) = public.port_or_known_default() {
+        let host = &public[url::Position::BeforeHost..url::Position::AfterHost];
+        transport.allowed_hosts.push(format!("{host}:{port}"));
+    }
     let mcp = StreamableHttpService::new(
         move || Ok(handler.clone()),
         Arc::new(LocalSessionManager::default()),
-        StreamableHttpServerConfig::default()
-            .with_stateful_mode(false)
-            .with_json_response(true),
+        transport,
     );
 
     let protected =
@@ -80,11 +86,14 @@ async fn authenticate_mcp(
     } else {
         None
     };
+    normalize_public_authority(&mut request, &state.config.public_base_url);
     let authorization = request
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok());
-    match state.authenticator.authenticate(authorization) {
+    let authenticated = state.authenticator.authenticate(authorization).await;
+    crate::observability::log_authentication(&authenticated, peer_ip(&request));
+    match authenticated {
         Ok(auth) => {
             request.extensions_mut().insert(auth);
             let response = next.run(request).await;
@@ -101,6 +110,31 @@ async fn authenticate_mcp(
 struct PreflightRequest {
     request: axum::extract::Request,
     original_numeric_id: Option<serde_json::Value>,
+}
+
+// rmcp compares explicit ports literally. Normalize only the configured public
+// authority's omitted standard port; other hosts and ports retain its protection.
+fn normalize_public_authority(request: &mut axum::extract::Request, public: &url::Url) {
+    if public.port().is_some() {
+        return;
+    }
+    let host = &public[url::Position::BeforeHost..url::Position::AfterHost];
+    let authority = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .or_else(|| {
+            request
+                .uri()
+                .authority()
+                .map(axum::http::uri::Authority::as_str)
+        });
+    if authority.is_some_and(|authority| authority.eq_ignore_ascii_case(host))
+        && let Some(port) = public.port_or_known_default()
+        && let Ok(value) = HeaderValue::from_str(&format!("{host}:{port}"))
+    {
+        request.headers_mut().insert(header::HOST, value);
+    }
 }
 
 struct PreflightResponse(Box<Response>);
@@ -341,11 +375,14 @@ async fn discovery(State(state): State<AppState>) -> impl IntoResponse {
     Json(build_protected_resource_metadata(&state.config))
 }
 
-async fn list_tools(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let authorization = headers
+async fn list_tools(State(state): State<AppState>, request: axum::extract::Request) -> Response {
+    let authorization = request
+        .headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok());
-    match state.authenticator.authenticate(authorization) {
+    let authenticated = state.authenticator.authenticate(authorization).await;
+    crate::observability::log_authentication(&authenticated, peer_ip(&request));
+    match authenticated {
         Ok(auth) => {
             let tools: Vec<_> = state
                 .handler
@@ -365,15 +402,25 @@ async fn list_tools(State(state): State<AppState>, headers: HeaderMap) -> Respon
     }
 }
 
+fn peer_ip(request: &axum::extract::Request) -> Option<std::net::IpAddr> {
+    request
+        .extensions()
+        .get::<ConnectInfo<std::net::SocketAddr>>()
+        .map(|peer| peer.0.ip())
+}
+
 fn auth_error_response(error: &AuthError) -> Response {
     let www = format!(
         "Bearer error=\"{}\", error_description=\"{}\"",
         error.code.as_str(),
-        sanitize_header_value(&error.message)
+        match error.code {
+            crate::auth::AuthErrorCode::MissingToken => "Missing bearer token",
+            crate::auth::AuthErrorCode::InvalidToken => "Invalid bearer token",
+        }
     );
     let mut response = (
         StatusCode::UNAUTHORIZED,
-        Json(serde_json::json!({ "error": error.code.as_str(), "message": error.message })),
+        Json(serde_json::json!({ "error": error.code.as_str(), "message": match error.code { crate::auth::AuthErrorCode::MissingToken => "Missing bearer token", crate::auth::AuthErrorCode::InvalidToken => "Invalid bearer token" } })),
     )
         .into_response();
     if let Ok(value) = HeaderValue::from_str(&www) {
@@ -382,10 +429,6 @@ fn auth_error_response(error: &AuthError) -> Response {
             .insert(header::WWW_AUTHENTICATE, value);
     }
     response
-}
-
-fn sanitize_header_value(value: &str) -> String {
-    value.replace('"', "'").replace(['\r', '\n'], " ")
 }
 
 /// Tower middleware: add OWASP security headers to every response.

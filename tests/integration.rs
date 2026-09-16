@@ -153,11 +153,12 @@ async fn tools_list_is_scope_filtered() {
 }
 
 #[tokio::test]
-async fn tools_list_requires_auth() {
+async fn development_tools_without_token_use_empty_fallback() {
     let (_dir, base) = spawn().await;
     let resp = reqwest::get(format!("{base}/tools")).await.unwrap();
-    assert_eq!(resp.status(), 401);
-    assert!(resp.headers().contains_key("www-authenticate"));
+    // Reference development mode permits no header; JWT 401 coverage is in auth_http.rs.
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.json::<Value>().await.unwrap()["tools"], json!([]));
 }
 
 #[tokio::test]
@@ -413,7 +414,7 @@ async fn mcp_roundtrip_enforces_each_request_scope() {
 }
 
 #[tokio::test]
-async fn mcp_rejects_unauthenticated_requests() {
+async fn development_mcp_without_token_has_no_scopes() {
     let (_dir, base) = spawn().await;
     let response = reqwest::Client::new()
         .post(format!("{base}/mcp"))
@@ -422,9 +423,13 @@ async fn mcp_rejects_unauthenticated_requests() {
         .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), 401);
-    assert!(response.headers().contains_key("www-authenticate"));
+    // Preserve missing-header coverage with the pinned reference fallback semantics.
+    assert_eq!(response.status(), 200);
     assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["result"]["tools"],
+        json!([])
+    );
 }
 
 #[test]

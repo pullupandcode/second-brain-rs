@@ -505,7 +505,7 @@ impl VaultWriter {
         if let Err(e) = tokio::fs::remove_file(&temp).await
             && e.kind() != std::io::ErrorKind::NotFound
         {
-            tracing::warn!(error=%e,"temporary write cleanup failed");
+            tracing::warn!(error_kind = ?e.kind(), "temporary write cleanup failed");
         }
         result
     }

@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-16
+
+- Verify production RS256/ES256 JWT access tokens against configured issuer JWKS;
+  enforce issuer, audience, subject, expiry, optional not-before and algorithm/key
+  metadata. Development scope tokens are never accepted in JWT mode.
+- Cache keys per issuer with serialized rollover, TTL expiry, bounded async HTTP,
+  failed-fetch cooldown and fail-closed refresh. Use AWS-LC cryptography.
+- Authenticate each dispatched MCP request asynchronously; preserve all eight
+  independent scopes and allow the exact configured public Host for HTTPS proxies.
+- Restore reference development-mode fallback scopes for missing headers.
+- Record authentication outcomes and peer IP without bearer contents; honor
+  explicit argument logging with conventional credential redaction.
+- Add signed-token adversarial, live HTTP, boundary, redaction, concurrency,
+  configuration and mutation-test evidence; document deployment and limitations.
+- Pre-1.0 API migration: `Authenticator::authenticate` returns `AuthFuture` and must
+  be awaited. `AuthContext` now includes issuer, audience and optional token ID;
+  operational log entries optionally include arguments. `exp` is required as
+  intentional hardening over the pinned reference's optional-exp behavior.
+
 ## [0.4.0] - 2026-09-16
 
 - Add reference-compatible framework schemas, LYT/PARA/Zettelkasten presets, overlays, and atomic registry persistence.

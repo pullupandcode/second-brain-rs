@@ -1,14 +1,57 @@
 # Parity delivery ledger
 
-Reference: second-brain-mcp `48b272337a6ef7e381fd175b2ff1844c02cebd7a` (v1.1.1).
-See [scope and gates](PARITY_PLAN.md).
+Reference: second-brain-mcp v1.1.1 at
+`48b272337a6ef7e381fd175b2ff1844c02cebd7a`.
+See the [scope and gates](PARITY_PLAN.md). Status snapshot: 2026-09-16.
 
-| Scope | Status | PR | Reviewed head / code / QA | Merge | Immutable release |
-|---|---|---|---|---|---|
-| A: protocol, reads, skills, OCR | Planned | — | — | — | v0.2.0 pending |
-| B: writes, deletes, audit | Planned | — | — | — | v0.3.0 pending |
-| C: frameworks, records, daily | Planned | — | — | — | v0.4.0 pending |
-| D: JWT, deployment, closure | Planned | — | — | — | v0.5.0 pending |
+All four implementation PRs are open. No parity implementation has been merged
+or released. The preexisting immutable [v0.1.0](https://github.com/pullupandcode/second-brain-rs/releases/tag/v0.1.0)
+remains unchanged.
 
-Baseline tests: 51 unit passed; 11 integration passed, 1 failed (empty search).
-No parity approval has been issued. No implementation release has been created.
+| Scope / version | Current status | PR | Independent verification | Merge / release |
+|---|---|---|---|---|
+| A: protocol, reads, skills, OCR / 0.2.0 | Privacy corrections verified; CI green; formal GitHub review pending | [#51](https://github.com/pullupandcode/second-brain-rs/pull/51) | Code and QA approved `83b83b5` | Not merged; 0.2.0 not published |
+| B: writes, deletes, audit / 0.3.0 | Implemented; corrected candidate verified; CI green | [#49](https://github.com/pullupandcode/second-brain-rs/pull/49) | Code and QA approved `718c36b` | Not merged; 0.3.0 not published |
+| C: frameworks, records, daily / 0.4.0 | Implemented; `8ec2bd0` final checks and reviews in progress | [#50](https://github.com/pullupandcode/second-brain-rs/pull/50) | Final code/QA approvals pending | Not merged; 0.4.0 not published |
+| D: JWT, deployment, closure / 0.5.0 | JWT and HTTP auth implemented; focused mutations passed; combined integration prepared; final verification pending | [#52](https://github.com/pullupandcode/second-brain-rs/pull/52) | Final code/QA approvals pending | Not merged; 0.5.0 not published |
+
+Scope A's Unicode-normalized privacy candidate `83b83b5` and scope B's integrated
+storage candidate `718c36b` each have independent code and QA agent approvals,
+with green CI. Scope C `8ec2bd0` is undergoing final checks and reviews. Scope D
+has not yet received its final independent reviews. These are explicitly labeled
+agent reviews, not separate GitHub accounts.
+GitHub ruleset `17368994` additionally requires a formal approval from
+another account before merging into main. The coordinator's squash-merge attempt
+was rejected by that rule; no protection has been bypassed. A formal reviewer
+must also be arranged before release sequencing can begin.
+
+B/C/D candidates are being integrated and checked while that gate is pending.
+Each dependent PR must subsequently be based on the actual preceding squash
+commits. Any new commit requires both independent reviewers to approve the new
+exact head. Green CI, required GitHub reviews and resolved threads are also merge
+gates. Approved scopes merge A → B → C → D, followed by matching version tags and
+GitHub releases whose `immutable: true` state is verified after publication.
+
+## Evidence and remaining closure
+
+- Pinned TypeScript baseline: 181 tests passed across 21 files.
+- Initial Rust baseline: 51 unit tests passed; 11 of 12 integration tests passed.
+  The initial empty-query search failure is corrected in A.
+- A's previously reviewed head passed format, current-stable Clippy, 77
+  unit/integration tests, dependency checks and semver classification. The corrected privacy candidate subsequently passed 56 unit and 23 integration
+  tests; its final exact-head review evidence is still being collected.
+- D's signed-token tests demonstrated the old JWT-to-development fallback failing
+  rejection tests before implementation. Real HTTP tests cover signatures, scopes,
+  cache behavior, proxy Host handling, error redaction and logging. The corrected
+  HTTP suite passed four consecutive runs after isolating tracing capture.
+- The corrected comprehensive D mutation run completed 100 cases: 83 caught,
+  17 unviable, zero missed, on the provisional protocol/auth integration. Its
+  predecessor stopped at an unmutated test failure and ran zero mutants. The
+  combined storage/framework candidate still requires its final integrated checks;
+  earlier coverage improvements are recorded in [scope D](parity/auth.md).
+
+Final combined all-feature tests, security/semver checks, mutation outcomes,
+exact-head independent approvals, squash SHAs and immutable release URLs remain
+to be recorded. There is no full-parity approval yet. Detailed evidence and
+intentional reference differences are in [A](parity/A.md), [B](parity/B.md),
+[C](parity/C.md), and [D](parity/auth.md).

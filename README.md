@@ -1,103 +1,94 @@
 # second-brain-rs
 
-Rust port of `second-brain-mcp` v1.1.1, delivered in reviewed increments.
-Version 0.4.0 implements read, write/delete, framework, capture, daily-note,
-skills, and OCR-contract tools. Production JWT mode fails closed until the
-verifier release. See [the parity plan](docs/PARITY_PLAN.md).
+A Rust Streamable HTTP MCP server for Markdown vaults, targeting
+[`second-brain-mcp` v1.1.1](https://github.com/pullupandcode/second-brain-mcp/tree/48b272337a6ef7e381fd175b2ff1844c02cebd7a).
+The combined **v0.5.0 candidate** includes audited note mutations, frameworks,
+captures, daily notes, private skill prompts, and production JWT verification.
+It is not a published or fully approved parity release: integration and review
+status are tracked in the [delivery ledger](docs/PARITY_STATUS.md).
 
-Build with current stable Rust (minimum 1.95):
+Build with current stable Rust:
 
 ```sh
-cargo build --release
-cargo run -- --config config.local.toml
+cargo +stable build --release --locked
+./target/release/second-brain-rs --config config.local.toml
 ```
 
-Copy [config.example.toml](config.example.toml), set existing vault and state paths,
-and use `auth.mode = "development"` only on loopback. For local testing, send
-`Authorization: Bearer scope=vault:read`. The HTTP endpoints are `/healthz`,
-`/.well-known/oauth-protected-resource`, `/tools`, and `/mcp` (stateless JSON MCP).
-Every protected request is authenticated independently. Request bodies are limited
-to 1,000,000 bytes; optional `mcp-method` and `mcp-name` headers must match the body.
+Copy [config.example.toml](config.example.toml), set an existing vault and separate
+state directory, and configure your JWT issuer and audience. Production mode
+verifies RS256/ES256 signatures with cached issuer keys. Local development mode
+accepts `Bearer scope=vault:read`; missing or unrecognized development scope claims
+use the configured fallback scopes. Development mode is restricted to loopback
+unless an operator explicitly enables its environment override.
 
-All 31 base tools have handlers; three optional OCR tools implement the reference
-job contract. Empty folder paths select the root; empty queries list indexed
-notes. The index is rebuilt at startup and after successful server mutations;
-external file edits require a restart to refresh search. Writes use `base_sha256`
-for optimistic concurrency, enforce a per-path cooldown, and record audit/provenance
-entries. Soft deletion moves notes into the configured trash; hard deletion requires
-its separate `vault:delete:hard` scope.
+The endpoints are `/mcp`, `/tools`, `/healthz`, and
+`/.well-known/oauth-protected-resource`. MCP uses stateless JSON responses and
+checks identity and scopes independently for each dispatched operation. Protocol
+preflight bounds request bodies at 1,000,000 bytes, validates optional `mcp-method`
+and `mcp-name` headers, and can answer protocol-only requests before authentication.
 
-| Scope | Purpose |
+## Tools and scopes
+
+The combined candidate has 31 base tools and three optional OCR contract tools.
+Scopes are independent: `admin` does not imply any other scope.
+
+| Scope | Tools or operations |
 |---|---|
-| `vault:read` | Notes, search, folders, links and structure |
-| `skills:read` | `prompts/list` and `prompts/get` |
-| `vault:write` | Note and record mutations |
-| `vault:delete` | Soft deletion |
-| `vault:delete:hard` | Permanent deletion |
-| `vault:capture` | Capture workflows |
-| `daily:append` | Daily-note append |
-| `admin` | Diagnostics, skill reload, framework management, OCR |
+| `vault:read` | `read_note`, `list_folder`, `search`, `get_backlinks`, `get_outgoing_links`, `daily_note_get`, `find_maps`, `list_record_types`, `get_vault_structure`, `link_to_page` |
+| `skills:read` | MCP `prompts/list` and `prompts/get` |
+| `vault:write` | `create_note`, `replace_note`, `update_frontmatter`, `replace_section_by_marker`, `create_record` |
+| `vault:delete` | `delete_note` |
+| `vault:delete:hard` | `hard_delete_note` |
+| `vault:capture` | `inbox_capture`, `capture_for_date` |
+| `daily:append` | `daily_note_append` |
+| `admin` | `list_vault_conflicts`, `daily_note_repair_markers`, `list_write_recovery_diagnostics`, `skills_list`, `skills_reload`, `framework_init`, `framework_reload`, `framework_register`, `framework_unregister`, `framework_list`, `framework_compose`; optional `ocr_notebook`, `ocr_status`, `ocr_renumber_notebook` |
 
-Configure `[skills] map_paths = ["Maps/Skills.md"]` to load linked notes with
-frontmatter `name` (lowercase slug, at most 64 characters) and `description`, plus
-nonempty body content. Maps support wikilinks, relative Markdown links, and
-`Path:` hints. Loaded and invalid candidates, configured maps, and their existing
-canonical targets are private to ordinary vault access. Hard-deny patterns use
-NFC Unicode normalization followed by Unicode case-insensitive matching on every
-platform, including prefixes that do not yet exist. This deliberately also blocks
-canonically equivalent or differently cased distinct paths on filesystems that
-distinguish them. Ordinary path identity, search identity and soft ignored-glob
-matching retain their original case-sensitive behavior. Admin diagnostics omit
-skill bodies; prompts require the separate `skills:read` scope. Reload replaces
-skills and the shared privacy policy without restart. Previously private notes
-remain absent from the index until a rebuild after being unloaded.
+`daily_note_get` can create a missing daily note from its template, even though it
+uses `vault:read`; this matches the reference. Existing-note mutations require
+`base_sha256` from the note's `currentSha256`, and enforce cooldown, privacy policy
+and conflict quarantine. Soft deletion uses the configured trash directory;
+permanent deletion requires its separate scope. Each note mutation records audit
+lifecycle/provenance, with incomplete-attempt diagnostics for recovery.
 
-`[ocr] enabled = true` adds `ocr_notebook`, `ocr_status`, and
-`ocr_renumber_notebook` (31 base tools, 34 with OCR). Jobs receive UUIDs and UTC
-timestamps and remain queued. As in the reference, this is an in-memory job
-contract, not an OCR worker; jobs disappear on restart.
+## Frameworks and private prompts
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for validation and
-[docs/parity/A.md](docs/parity/A.md) and [docs/parity/B.md](docs/parity/B.md)
-for reference mappings and intentional
-security/compatibility improvements.
+Initialize LYT, PARA or Zettelkasten with `framework_init`, or copy the
+[LYT starter schema](examples/vault/_meta/framework.lyt.yaml) to your vault's
+`_meta/framework.yaml`. Register overlays with an optional priority and inspect
+`framework_compose`. Records use schema folders, filename patterns and templates;
+source-ID replacement supports repeatable captures. Daily workflows use
+`Calendar/Days/YYYY-MM-DD.md` and `x/Templates/Daily Template.md`.
 
-Framework reference mappings and test evidence are recorded in
-[scope C](docs/parity/C.md).
+Configure `[skills] map_paths = ["Maps/Skills.md"]` to load linked skill notes.
+Each skill has frontmatter `name` (a lowercase slug, at most 64 characters),
+`description`, and a nonempty body. Maps support wikilinks, Markdown links and
+`Path:` hints. Skill maps, discovered candidates and canonical targets are private
+to ordinary vault access. Hard denies apply NFC Unicode normalization followed
+by Unicode case-insensitive matching on every platform, including path prefixes
+that do not yet exist. This deliberately also denies canonically equivalent or
+differently cased distinct paths on filesystems that distinguish them.
+Ordinary path identity, search identity, and soft ignored globs remain
+case-sensitive. Admin diagnostics omit bodies; retrieving a prompt
+requires `skills:read`. Reload updates prompts and the shared privacy policy.
 
-## Framework schemas and records
+## Reference limits and deliberate differences
 
-Initialize a starter schema using `framework_init` with `framework: lyt`, `para`,
-or `zettel`. Creation is exclusive; `mode: overwrite` explicitly replaces an
-existing schema. The default path is `_meta/framework.yaml`, configurable through
-`[framework].schema_path`.
+- The index rebuilds at startup and after server mutations. External edits need
+  a restart or subsequent rebuild to refresh search; background watching is not
+  implemented. The `watcher_polling` setting is retained for compatibility.
+- `capture_default_pattern` is parsed but unused by the reference runtime.
+  Captures create records; daily appends are explicit operations.
+- Framework field/default declarations are exposed, but required-field validation
+  and automatic defaults are not applied. Missing record templates are tolerated;
+  the daily template is required when creating or repairing a daily note.
+- OCR tools only queue and inspect in-memory jobs. There is no OCR worker and no
+  job persistence, matching the reference contract.
+- JWT expiry is required as intentional hardening. Network/key-cache limits,
+  sanitized failures, canonical-path privacy, atomic publication and stricter
+  filesystem protections are documented in the scope reports.
 
-For a richer LYT starting point, copy
-[examples/vault/_meta/framework.lyt.yaml](examples/vault/_meta/framework.lyt.yaml)
-to your vault as `_meta/framework.yaml`. Customize its folders, filename patterns,
-and template paths. Record templates that do not exist are treated as empty.
-
-Register overlays with `framework_register` (`name`, `path`, optional integer
-`priority`, default 100). Registrations persist in `_meta/schemas.json` and compose
-in priority/name order. `framework_reload` reports per-overlay validation;
-`framework_compose` computes the effective schema. Types may only replace an
-existing definition when the overlay declares `override: true`; overlays cannot
-change the base `inbox.folder`.
-
-`create_record` expands schema filename tokens and merges optional `fields` with
-record metadata. `capture_for_date` and `inbox_capture` create capture records;
-`inbox_capture` with `strategy: replace_by_source_id` replaces the indexed source
-note using its current hash. Captures do not modify daily notes.
-
-`daily_note_get` reads or creates `Calendar/Days/YYYY-MM-DD.md` from
-`x/Templates/Daily Template.md`. `daily_note_append` requires `base_sha256` and
-appends to `daily-log` by default, or the named writable `last-light` section.
-`agenda` is protected. Administrators can restore missing template marker blocks
-with `daily_note_repair_markers`.
-
-Schema/registry metadata uses atomic publication and effective path policy, with
-no note cooldown. A schema output path ending in `.md` uses the audited note
-writer and its cooldown policy. All note mutations use audited, hash-checked storage operations.
-The reference schema subset exposes frontmatter defaults and field declarations;
-record creation only synthesizes `scheduled` and normalizes meeting attendees.
-It does not enforce required fields or apply schema defaults automatically.
+See the [user guide](docs/USER_GUIDE.md), [authentication guide](docs/AUTHENTICATION.md),
+[deployment guide](docs/DEPLOYMENT.md), and [configuration example](config.example.toml).
+Development and review requirements are in [CONTRIBUTING.md](CONTRIBUTING.md).
+Reference mappings and test evidence: [A](docs/parity/A.md), [B](docs/parity/B.md),
+[C](docs/parity/C.md), [D](docs/parity/auth.md).

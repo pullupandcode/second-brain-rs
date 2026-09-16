@@ -50,10 +50,13 @@ async fn serve(config: ServerConfig) -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to bind {listen}"))?;
     tracing::info!(%listen, "second-brain-rs listening");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("server error")?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("server error")?;
     Ok(())
 }
 

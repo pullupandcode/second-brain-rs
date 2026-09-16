@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use crate::auth::{
-    AuthContext, AuthError, Authenticator,
+    AuthContext, AuthFuture, Authenticator,
     scopes::{Scope, parse_scopes},
 };
 
@@ -11,22 +11,32 @@ use crate::auth::{
 #[derive(Debug, Clone)]
 pub struct DevAuthenticator {
     default_scopes: HashSet<Scope>,
+    audience: String,
 }
 
 impl DevAuthenticator {
     /// Create a dev authenticator with fallback scopes for empty claims.
     #[must_use]
     pub const fn new(default_scopes: HashSet<Scope>) -> Self {
-        Self { default_scopes }
+        Self {
+            default_scopes,
+            audience: String::new(),
+        }
+    }
+
+    /// Set the audience reported in the development context.
+    #[must_use]
+    pub fn with_audience(mut self, audience: &str) -> Self {
+        audience.clone_into(&mut self.audience);
+        self
     }
 }
 
 impl Authenticator for DevAuthenticator {
-    fn authenticate(&self, authorization: Option<&str>) -> Result<AuthContext, AuthError> {
-        let header = authorization.ok_or_else(|| AuthError::missing("Missing bearer token"))?;
-        let token = header
-            .strip_prefix("Bearer ")
-            .ok_or_else(|| AuthError::missing("Missing bearer token"))?;
+    fn authenticate<'a>(&'a self, authorization: Option<&'a str>) -> AuthFuture<'a> {
+        let token = authorization
+            .and_then(|header| header.strip_prefix("Bearer "))
+            .unwrap_or("");
         let claim = token.strip_prefix("scope=").unwrap_or("");
         let parsed = parse_scopes(claim);
         let scopes = if parsed.is_empty() {
@@ -34,11 +44,14 @@ impl Authenticator for DevAuthenticator {
         } else {
             parsed
         };
-        Ok(AuthContext {
+        Box::pin(std::future::ready(Ok(AuthContext {
+            issuer: "urn:second-brain-mcp:development".to_owned(),
+            audience: self.audience.clone(),
+            token_id: None,
             subject: "development".to_owned(),
             scopes,
             client_id: None,
-        })
+        })))
     }
 }
 
@@ -46,28 +59,50 @@ impl Authenticator for DevAuthenticator {
 mod tests {
     use super::*;
 
-    #[test]
-    fn parses_explicit_scopes() {
+    #[tokio::test]
+    async fn parses_explicit_scopes() {
         let auth = DevAuthenticator::new(HashSet::new());
         let ctx = auth
             .authenticate(Some("Bearer scope=vault:read admin"))
+            .await
             .unwrap();
         assert_eq!(ctx.subject, "development");
         assert!(ctx.scopes.contains(&Scope::VaultRead));
         assert!(ctx.scopes.contains(&Scope::Admin));
     }
 
-    #[test]
-    fn falls_back_to_defaults_when_no_scope_claim() {
+    #[tokio::test]
+    async fn falls_back_to_defaults_when_no_scope_claim() {
         let auth = DevAuthenticator::new(HashSet::from([Scope::VaultRead]));
-        let ctx = auth.authenticate(Some("Bearer scope=")).unwrap();
+        let ctx = auth.authenticate(Some("Bearer scope=")).await.unwrap();
         assert_eq!(ctx.scopes, HashSet::from([Scope::VaultRead]));
     }
 
-    #[test]
-    fn missing_header_is_missing_token() {
+    #[tokio::test]
+    async fn missing_header_uses_fallback() {
         let auth = DevAuthenticator::new(HashSet::new());
-        let err = auth.authenticate(None).unwrap_err();
-        assert_eq!(err.code, crate::auth::AuthErrorCode::MissingToken);
+        let ctx = auth.authenticate(None).await.unwrap();
+        assert!(ctx.scopes.is_empty());
+    }
+    #[tokio::test]
+    async fn missing_and_malformed_headers_use_configured_fallback() {
+        let auth = DevAuthenticator::new(HashSet::from([Scope::VaultRead]))
+            .with_audience("configured-audience");
+        for header in [
+            None,
+            Some("Basic secret"),
+            Some("Bearer other"),
+            Some("Bearer scope=unknown"),
+        ] {
+            let ctx = auth.authenticate(header).await.unwrap();
+            assert_eq!(ctx.subject, "development");
+            assert_eq!(ctx.issuer, "urn:second-brain-mcp:development");
+            assert_eq!(ctx.audience, "configured-audience");
+            assert_eq!(ctx.scopes, HashSet::from([Scope::VaultRead]));
+            assert!(ctx.token_id.is_none());
+            assert!(ctx.client_id.is_none());
+        }
+        let explicit = auth.authenticate(Some("Bearer scope=admin")).await.unwrap();
+        assert_eq!(explicit.scopes, HashSet::from([Scope::Admin]));
     }
 }

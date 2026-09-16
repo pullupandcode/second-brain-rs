@@ -320,8 +320,8 @@ impl Runtime {
             None
         };
         let result = self.framework.dispatch(name, args).await?;
-        if mutating && let Err(error) = self.cold_rebuild().await {
-            tracing::error!(%error,"index refresh after framework write failed");
+        if mutating && self.cold_rebuild().await.is_err() {
+            tracing::error!("index refresh after framework write failed");
         }
         Ok(result)
     }
@@ -386,8 +386,8 @@ impl Runtime {
             _ => return Err(DispatchError::UnknownTool(name.into())),
         };
         // A completed filesystem mutation remains successful even if rebuilding fails.
-        if let Err(error) = self.cold_rebuild().await {
-            tracing::error!(%error,"index refresh after write failed");
+        if self.cold_rebuild().await.is_err() {
+            tracing::error!("index refresh after write failed");
         }
         to_value(&result)
     }
@@ -768,5 +768,33 @@ mod tests {
             runtime.dispatch("nope", &empty).await,
             Err(DispatchError::UnknownTool(_))
         ));
+    }
+    #[test]
+    fn argument_validators_distinguish_empty_missing_and_wrong_types() {
+        let empty = Map::new();
+        assert!(require_string(&empty, "path").is_err());
+        assert!(string_allow_empty(&empty, "path").is_err());
+        assert_eq!(optional_bool(&empty, "recursive").unwrap(), None);
+        for value in [Value::Null, json!(1), json!(false), json!([]), json!({})] {
+            let args = Map::from_iter([("path".to_owned(), value)]);
+            assert!(require_string(&args, "path").is_err());
+            assert!(string_allow_empty(&args, "path").is_err());
+        }
+        let args = Map::from_iter([("path".to_owned(), json!(""))]);
+        assert!(require_string(&args, "path").is_err());
+        assert_eq!(string_allow_empty(&args, "path").unwrap(), "");
+        for value in ["test.md", " "] {
+            let args = Map::from_iter([("path".to_owned(), json!(value))]);
+            assert_eq!(require_string(&args, "path").unwrap(), value);
+            assert_eq!(string_allow_empty(&args, "path").unwrap(), value);
+        }
+        for value in [true, false] {
+            let args = Map::from_iter([("recursive".to_owned(), json!(value))]);
+            assert_eq!(optional_bool(&args, "recursive").unwrap(), Some(value));
+        }
+        for value in [Value::Null, json!("false"), json!(0), json!([]), json!({})] {
+            let args = Map::from_iter([("recursive".to_owned(), value)]);
+            assert!(optional_bool(&args, "recursive").is_err());
+        }
     }
 }
