@@ -35,6 +35,11 @@ reference build's pure schema functions and tool names; it covers all 34 schemas
 - RED: list_folder(file.md) returned success; now propagates sanitized read errors.
 - QA RED: initialize leaked rmcp build identity and default protocol version;
   explicit package identity and requested protocol version now have HTTP regressions.
+- RED: a mode-000 Private/** directory caused conflict-scan startup failure;
+  GREEN after applying the effective policy before stat/open of any subtree.
+- RED: malformed search tag/folder values were silently ignored and broadened
+  results; GREEN after explicit object/string validation (an intentional stricter
+  input contract than the reference unchecked filter properties).
 - Security dependencies checked centrally: cargo-deny/audit pass without waivers.
   Final validation commands and candidate head are recorded on the PR.
 
@@ -58,3 +63,13 @@ reference build's pure schema functions and tool names; it covers all 34 schemas
   index remains stale after external edits, including skills unloaded by reload.
 - Write/framework/daily/capture handlers remain explicit tool errors pending B/C.
   Full parity and production readiness are not claimed in this release.
+
+## Public API compatibility
+
+A forced patch-level `cargo semver-checks` comparison against v0.1.0 identifies
+three intentional pre-1.0 minor-release changes: `SecondBrainHandler::new` now
+requires a runtime argument; the shared runtime means the handler no longer
+implements `UnwindSafe`/`RefUnwindSafe`; and inserting the three added scopes
+changes Rust enum discriminants. OAuth wire strings are stable. These changes
+are released as 0.2.0, never as a 0.1.x patch; downstream Rust integrations must
+construct a runtime and must not persist numeric Scope discriminants.

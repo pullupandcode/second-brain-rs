@@ -17,6 +17,9 @@
 - Fail closed for JWT mode until the production verifier release; pending tools
   return errors rather than successful `not_implemented` responses.
 - Update vulnerable/yanked dependency versions without advisory exceptions.
+- Intentional pre-1.0 API changes: handler construction requires runtime;
+  handler no longer implements unwind-safety auto traits; Scope numeric
+  discriminants change while OAuth wire strings remain stable.
 
 ## [0.1.0]
 

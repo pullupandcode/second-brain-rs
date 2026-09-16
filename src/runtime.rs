@@ -179,7 +179,7 @@ impl Runtime {
                 outgoing_links: parsed.outgoing_links,
             });
         }
-        let conflicts = scan_conflicts(Path::new(&self.config.vault_path)).await?;
+        let conflicts = scan_conflicts(Path::new(&self.config.vault_path), &self.policy).await?;
         let index = Arc::clone(&self.index);
         tokio::task::spawn_blocking(move || index.rebuild(&notes, &conflicts)).await??;
         Ok(())
@@ -247,6 +247,16 @@ impl Runtime {
                 ));
             }
         };
+        for key in ["folder", "tag"] {
+            if filters
+                .and_then(|filters| filters.get(key))
+                .is_some_and(|value| !value.is_string())
+            {
+                return Err(DispatchError::Invalid(format!(
+                    "filters.{key} must be a string"
+                )));
+            }
+        }
         let search_filters = SearchFilters {
             folder: filters
                 .and_then(|f| f.get("folder"))
@@ -365,22 +375,29 @@ async fn effective_paths(config: &ServerConfig, load: &SkillLoad) -> Vec<String>
     paths
 }
 
-async fn scan_conflicts(vault_root: &Path) -> Result<Vec<ConflictPair>, RuntimeError> {
+async fn scan_conflicts(
+    vault_root: &Path,
+    policy: &PathPolicy,
+) -> Result<Vec<ConflictPair>, RuntimeError> {
     let mut pairs = Vec::new();
     let mut stack = vec![vault_root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let mut read_dir = tokio::fs::read_dir(&dir).await?;
         while let Some(entry) = read_dir.next_entry().await? {
             let full = entry.path();
+            let Ok(relative) = full.strip_prefix(vault_root) else {
+                continue;
+            };
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            // Exclude private subtrees before stat/open, matching the read/index policy.
+            if policy.is_blocked(&relative) {
+                continue;
+            }
             let metadata = tokio::fs::symlink_metadata(&full).await?;
             if metadata.is_dir() {
                 stack.push(full);
                 continue;
             }
-            let Ok(relative) = full.strip_prefix(vault_root) else {
-                continue;
-            };
-            let relative = relative.to_string_lossy().replace('\\', "/");
             if is_markdown_path(&relative)
                 && let Some(canonical) = canonical_conflict_path(&relative)
             {

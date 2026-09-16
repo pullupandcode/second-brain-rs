@@ -675,3 +675,40 @@ async fn listing_a_file_is_an_error() {
             .is_err()
     );
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn conflict_scan_never_opens_blocked_directories() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, config) = fixture().await;
+    let private = dir.path().join("vault/Private");
+    tokio::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o000))
+        .await
+        .unwrap();
+    let result = Runtime::create(config).await;
+    tokio::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700))
+        .await
+        .unwrap();
+    assert!(
+        result.is_ok(),
+        "blocked subtree must not be traversed: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn malformed_search_filters_never_broaden_results() {
+    let (_dir, runtime) = runtime().await;
+    for filters in [
+        json!({"tag":123}),
+        json!({"folder":false}),
+        json!({"tag":null}),
+        json!([]),
+    ] {
+        assert!(
+            runtime
+                .dispatch("search", &args(json!({"query":"", "filters":filters})))
+                .await
+                .is_err()
+        );
+    }
+}
