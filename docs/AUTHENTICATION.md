@@ -43,7 +43,7 @@ previously issued tokens expire. Tokens are limited to 16 KiB.
 `GET /.well-known/oauth-protected-resource` provides the public resource URL,
 authorization server, and supported scopes. `/healthz` and discovery are public.
 `/tools` and each dispatched MCP operation authenticate independently.
-Protocol preflight can answer ping, empty resource listings, notifications,
+Protocol preflight can answer initialization, ping, empty resource listings, notifications,
 and malformed requests before authentication; it never dispatches vault tools. Missing or invalid
 production tokens return HTTP 401 with `WWW-Authenticate`; errors do not contain
 token contents, cryptographic diagnostics, upstream bodies, or filesystem paths.

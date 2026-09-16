@@ -113,9 +113,13 @@ misreported as a passing compatibility check.
 
 ## Verification status
 
-Draft [PR #52](https://github.com/pullupandcode/second-brain-rs/pull/52).
-Work in progress. Final stable Clippy, complete integrated tests, deny/audit,
-semver classification, mutation verification after integration, independent
-code/QA approvals,
-PR and release links will be recorded before closure. No full-parity or release
-approval is asserted by this report yet.
+[PR #52](https://github.com/pullupandcode/second-brain-rs/pull/52) contains the
+complete combined implementation. The corrected code candidate `1f9bc21` passes
+182 all-feature tests, nightly formatting, strict current-stable Clippy,
+cargo-deny and cargo-audit. Independent signed/header/scope/cache probes pass.
+The final transport integration leaves mutation-tested source and auth tests
+byte-identical to `e8743e2`; its full unmutated suite passes. Final exact-head
+code/QA decisions and CI are recorded on the PR, including any documentation-only
+follow-up. No merge or release is claimed: the repository requires formal
+external-account approval and actual preceding squash-commit integration.
+See [the delivery ledger](../PARITY_STATUS.md) for current gates.
