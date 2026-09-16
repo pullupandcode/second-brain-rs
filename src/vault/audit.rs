@@ -101,7 +101,7 @@ CREATE INDEX IF NOT EXISTS write_audit_attempts_attempt_id_idx ON write_audit_at
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut stmt=db.prepare("SELECT attempt_id,operation,path,base_sha256,metadata_json,created_at FROM write_audit_attempts s WHERE event_type='started' AND NOT EXISTS(SELECT 1 FROM write_audit_attempts t WHERE t.attempt_id=s.attempt_id AND t.event_type IN ('succeeded','failed')) ORDER BY id DESC LIMIT ?")?;
-        let rows=stmt.query_map([limit.unwrap_or(100).clamp(1,1000)],|r|{let base:Option<String>=r.get(3)?;let raw:String=r.get(4)?;let mut v=json!({"attemptId":r.get::<_,String>(0)?,"operation":r.get::<_,String>(1)?,"path":r.get::<_,String>(2)?,"metadata":serde_json::from_str::<Value>(&raw).unwrap_or(json!({})),"startedAt":r.get::<_,String>(5)?});if let Some(base)=base{v["baseSha256"]=json!(base);}Ok(v)})?;
+        let rows=stmt.query_map([limit.unwrap_or(100).clamp(1,1000)],|r|{let base:Option<String>=r.get(3)?;let raw:String=r.get(4)?;let mut v=json!({"attemptId":r.get::<_,String>(0)?,"operation":r.get::<_,String>(1)?,"path":r.get::<_,String>(2)?,"metadata":serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| json!({})),"startedAt":r.get::<_,String>(5)?});if let Some(base)=base && let Some(map)=v.as_object_mut(){map.insert("baseSha256".into(),json!(base));}Ok(v)})?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
     /// Return successful writes, newest first, with a bounded limit.
@@ -113,7 +113,7 @@ CREATE INDEX IF NOT EXISTS write_audit_attempts_attempt_id_idx ON write_audit_at
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut stmt=db.prepare("SELECT id,operation,path,base_sha256,result_sha256,metadata_json,created_at FROM write_audit ORDER BY id DESC LIMIT ?")?;
-        let rows=stmt.query_map([limit.unwrap_or(100).clamp(1,1000)],|r|{let base:Option<String>=r.get(3)?;let raw:String=r.get(5)?;let mut v=json!({"id":r.get::<_,i64>(0)?,"operation":r.get::<_,String>(1)?,"path":r.get::<_,String>(2)?,"resultSha256":r.get::<_,String>(4)?,"metadata":serde_json::from_str::<Value>(&raw).unwrap_or(json!({})),"createdAt":r.get::<_,String>(6)?});if let Some(base)=base{v["baseSha256"]=json!(base);}Ok(v)})?;
+        let rows=stmt.query_map([limit.unwrap_or(100).clamp(1,1000)],|r|{let base:Option<String>=r.get(3)?;let raw:String=r.get(5)?;let mut v=json!({"id":r.get::<_,i64>(0)?,"operation":r.get::<_,String>(1)?,"path":r.get::<_,String>(2)?,"resultSha256":r.get::<_,String>(4)?,"metadata":serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| json!({})),"createdAt":r.get::<_,String>(6)?});if let Some(base)=base && let Some(map)=v.as_object_mut(){map.insert("baseSha256".into(),json!(base));}Ok(v)})?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 }

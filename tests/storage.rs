@@ -128,3 +128,295 @@ async fn frontmatter_markers_and_per_path_serialization() {
     );
     assert_ne!(one.is_ok(), two.is_ok());
 }
+
+#[tokio::test]
+async fn changed_policy_symlinks_and_trash_collisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let policy = PathPolicy::new(vec![]);
+    let w = VaultWriter::new(
+        VaultWriterOptions {
+            vault_root: dir.path().into(),
+            cooldown_seconds: 0,
+            blocked_paths: policy.clone(),
+            quarantined_paths: HashSet::new(),
+            trash_path: ".trash/mcp".into(),
+        },
+        None,
+    );
+    let first = w.create_note("a.md", "one", None).await.unwrap();
+    policy.replace(vec!["a.md".into()]);
+    assert_eq!(
+        w.replace_note("a.md", "no", &first.result_sha256, None)
+            .await
+            .unwrap_err()
+            .code(),
+        "path_blocked"
+    );
+    policy.replace(vec![]);
+    let deleted = w.delete_note("a.md", &first.result_sha256).await.unwrap();
+    let second = w.create_note("a.md", "two", None).await.unwrap();
+    let deleted2 = w.delete_note("a.md", &second.result_sha256).await.unwrap();
+    assert_ne!(deleted.deleted_path, deleted2.deleted_path);
+    assert_eq!(
+        tokio::fs::read_to_string(dir.path().join(deleted.deleted_path.unwrap()))
+            .await
+            .unwrap(),
+        "one"
+    );
+    assert_eq!(
+        tokio::fs::read_to_string(dir.path().join(deleted2.deleted_path.unwrap()))
+            .await
+            .unwrap(),
+        "two"
+    );
+    #[cfg(unix)]
+    {
+        tokio::fs::symlink(outside.path(), dir.path().join("escape"))
+            .await
+            .unwrap();
+        assert!(w.create_note("escape/a.md", "bad", None).await.is_err());
+        assert!(!outside.path().join("a.md").exists());
+        tokio::fs::symlink(dir.path().join(".trash"), dir.path().join("alias"))
+            .await
+            .unwrap();
+        assert!(w.create_note("alias/new.md", "bad", None).await.is_err());
+    }
+}
+
+#[tokio::test]
+async fn markers_failure_and_empty_content_leave_original_intact() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = writer(dir.path(), 0);
+    for (i, text) in [
+        "no markers",
+        "<!-- mcp:section x start -->",
+        "<!-- mcp:section x end -->\n<!-- mcp:section x start -->",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let path = format!("{i}.md");
+        let c = w.create_note(&path, text, None).await.unwrap();
+        assert_eq!(
+            w.replace_section_by_marker(&path, "x", "bad", &c.result_sha256)
+                .await
+                .unwrap_err()
+                .code(),
+            "markers_missing"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(dir.path().join(&path))
+                .await
+                .unwrap(),
+            *text
+        );
+    }
+    let empty = w.create_note("empty.md", "", None).await.unwrap();
+    w.hard_delete_note("empty.md", &empty.result_sha256)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn audit_lifecycle_provenance_and_append_only_guards() {
+    use second_brain_rs::vault::audit::{AuditInput, VaultWriteAuditStore};
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("audit.sqlite");
+    let audit = Arc::new(VaultWriteAuditStore::open(&db_path).unwrap());
+    let w = VaultWriter::new(
+        VaultWriterOptions {
+            vault_root: dir.path().into(),
+            cooldown_seconds: 0,
+            blocked_paths: PathPolicy::default(),
+            quarantined_paths: HashSet::new(),
+            trash_path: ".trash/mcp".into(),
+        },
+        Some(Arc::clone(&audit)),
+    );
+    let created = w
+        .create_note("a.md", "SECRET NEVER IN AUDIT", None)
+        .await
+        .unwrap();
+    w.replace_note("a.md", "second", &created.result_sha256, None)
+        .await
+        .unwrap();
+    assert!(w.create_note("a.md", "failed", None).await.is_err());
+    let rows = audit.list_recent_writes(None).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows.first().unwrap().get("operation").unwrap(),
+        "replace_note"
+    );
+    assert!(!serde_json::to_string(&rows).unwrap().contains("SECRET"));
+    assert_eq!(audit.list_recent_writes(Some(-1)).unwrap().len(), 1);
+    assert!(audit.list_incomplete_writes(None).unwrap().is_empty());
+    let input = AuditInput {
+        operation: "replace_note".into(),
+        path: "crashed.md".into(),
+        base_sha256: Some("old".into()),
+        metadata: serde_json::json!({"markerName":"section"}),
+    };
+    let id = audit.record_write_started(&input).unwrap();
+    assert_eq!(uuid::Uuid::parse_str(&id).unwrap().get_version_num(), 4);
+    let incomplete = audit.list_incomplete_writes(None).unwrap();
+    assert_eq!(incomplete.len(), 1);
+    assert_eq!(incomplete.first().unwrap().get("attemptId").unwrap(), &id);
+    drop(w);
+    drop(audit);
+    let db = rusqlite::Connection::open(&db_path).unwrap();
+    for table in ["write_audit", "write_audit_attempts"] {
+        for sql in [
+            format!("UPDATE {table} SET path='tampered'"),
+            format!("DELETE FROM {table}"),
+        ] {
+            assert!(
+                db.execute_batch(&sql)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("append-only")
+            );
+        }
+    }
+    assert!(
+        db.execute_batch("INSERT OR REPLACE INTO write_audit SELECT * FROM write_audit WHERE id=1")
+            .is_err()
+    );
+    assert!(db.execute_batch("INSERT OR REPLACE INTO write_audit_attempts SELECT * FROM write_audit_attempts WHERE id=1").is_err());
+    drop(db);
+    let reopened = VaultWriteAuditStore::open(&db_path).unwrap();
+    assert_eq!(reopened.list_incomplete_writes(None).unwrap().len(), 1);
+    reopened.record_write_failed(&id, "recovered").unwrap();
+    assert!(reopened.list_incomplete_writes(None).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn audit_rotation_threshold_archive_name_and_new_store() {
+    use second_brain_rs::vault::audit::{
+        AuditInput, VaultWriteAuditStore, rotate_write_audit_if_needed,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("audit.sqlite");
+    let archive = dir.path().join("archive");
+    tokio::fs::write(&path, "").await.unwrap();
+    assert!(
+        rotate_write_audit_if_needed(&path, &archive, 1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let store = VaultWriteAuditStore::open(&path).unwrap();
+    let input = AuditInput {
+        operation: "create_note".into(),
+        path: "a.md".into(),
+        base_sha256: None,
+        metadata: serde_json::json!({}),
+    };
+    store.record_write(&input, "hash1").unwrap();
+    drop(store);
+    assert!(
+        rotate_write_audit_if_needed(&path, &archive, 1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let store = VaultWriteAuditStore::open(&path).unwrap();
+    store.record_write(&input, "hash2").unwrap();
+    drop(store);
+    assert!(
+        rotate_write_audit_if_needed(&path, &archive, 0)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let archived = rotate_write_audit_if_needed(&path, &archive, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        regex::Regex::new(r"^write-audit\.\d{8}T\d{9}Z\.sqlite$")
+            .unwrap()
+            .is_match(archived.file_name().unwrap().to_str().unwrap())
+    );
+    assert!(!path.exists());
+    assert_eq!(
+        VaultWriteAuditStore::open(&archived)
+            .unwrap()
+            .list_recent_writes(None)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        VaultWriteAuditStore::open(&path)
+            .unwrap()
+            .list_recent_writes(None)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+proptest::proptest! {
+    #[test]
+    fn frontmatter_simple_values_roundtrip(text in "[a-zA-Z0-9 _-]{0,80}", flag in proptest::bool::ANY, number in -10000i32..10000) {
+        use second_brain_rs::vault::{writer::with_frontmatter,markdown::parse_markdown};
+        let map=BTreeMap::from([("text".into(),FrontmatterValue::String(text)),("flag".into(),FrontmatterValue::Bool(flag)),("number".into(),FrontmatterValue::Number(f64::from(number)))]);
+        let serialized=with_frontmatter("body",Some(&map)).unwrap();
+        let parsed=parse_markdown(&serialized);
+        proptest::prop_assert_eq!(parsed.frontmatter,map);
+        proptest::prop_assert_eq!(parsed.body,"body");
+    }
+}
+
+#[tokio::test]
+async fn audit_failure_does_not_turn_completed_write_into_retry() {
+    use second_brain_rs::vault::audit::VaultWriteAuditStore;
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("audit.sqlite");
+    let audit = Arc::new(VaultWriteAuditStore::open(&db_path).unwrap());
+    let db = rusqlite::Connection::open(&db_path).unwrap();
+    db.execute_batch("CREATE TRIGGER simulate_audit_failure BEFORE INSERT ON write_audit BEGIN SELECT RAISE(ABORT,'disk full'); END; CREATE TRIGGER simulate_attempt_failure BEFORE INSERT ON write_audit_attempts BEGIN SELECT RAISE(ABORT,'disk full'); END;").unwrap();
+    let w = VaultWriter::new(
+        VaultWriterOptions {
+            vault_root: dir.path().into(),
+            cooldown_seconds: 0,
+            blocked_paths: PathPolicy::default(),
+            quarantined_paths: HashSet::new(),
+            trash_path: ".trash/mcp".into(),
+        },
+        Some(audit),
+    );
+    let result = w.create_note("safe.md", "complete", None).await.unwrap();
+    assert_eq!(result.path, "safe.md");
+    assert_eq!(
+        tokio::fs::read_to_string(dir.path().join("safe.md"))
+            .await
+            .unwrap(),
+        "complete"
+    );
+}
+
+#[tokio::test]
+async fn concurrent_creates_from_separate_writers_cannot_overwrite() {
+    let dir = tempfile::tempdir().unwrap();
+    let one = writer(dir.path(), 0);
+    let two = writer(dir.path(), 0);
+    let (first, second) = tokio::join!(
+        one.create_note("a.md", "first", None),
+        two.create_note("a.md", "second", None)
+    );
+    assert_ne!(first.is_ok(), second.is_ok());
+    let expected = if first.is_ok() { "first" } else { "second" };
+    assert_eq!(
+        tokio::fs::read_to_string(dir.path().join("a.md"))
+            .await
+            .unwrap(),
+        expected
+    );
+    let mut entries = tokio::fs::read_dir(dir.path()).await.unwrap();
+    let mut count = 0;
+    while entries.next_entry().await.unwrap().is_some() {
+        count += 1;
+    }
+    assert_eq!(count, 1);
+}

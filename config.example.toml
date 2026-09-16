@@ -31,6 +31,9 @@ ignored_globs = [
 [writes]
 cooldown_seconds = 2
 
+[deletes]
+trash_path = ".trash/mcp"
+
 [audit]
 # When greater than 0, startup archives the write-audit DB once it exceeds this.
 retention_max_rows = 0

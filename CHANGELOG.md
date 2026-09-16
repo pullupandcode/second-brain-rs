@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-16
+
+- Implement atomic create/replace, frontmatter patches and marker replacements with optimistic hashes, cooldown and per-path serialization.
+- Add soft deletion with collision-safe trash destinations and separate permanent deletion.
+- Persist append-only audit lifecycle and successful-write provenance, recover incomplete attempts and rotate oversized audit databases at startup.
+- Apply reloadable path policy, quarantine and symlink protections to every mutation; refresh the index after successful runtime writes.
+- Add `[deletes].trash_path` and writer APIs for framework, capture and daily-note workflows.
+
 ## [0.2.0] - 2026-09-16
 
 - Incorporate the phase-2 vault reader, parser, SQLite index, path policy and tests.

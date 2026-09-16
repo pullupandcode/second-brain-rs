@@ -161,10 +161,10 @@ impl VaultWriter {
     pub async fn update_frontmatter(
         &self,
         path: &str,
-        patch: &BTreeMap<String, FrontmatterValue>,
+        updates: &BTreeMap<String, FrontmatterValue>,
         base_sha256: &str,
     ) -> Result<WriteResult, VaultWriteError> {
-        self.mutate(path, Some(base_sha256), Mutation::Frontmatter(patch))
+        self.mutate(path, Some(base_sha256), Mutation::Frontmatter(updates))
             .await
     }
     /// Replace the content between an existing ordered marker pair.
@@ -220,18 +220,20 @@ impl VaultWriter {
         let lock = {
             let mut locks = self.locks.lock().await;
             locks.retain(|_, lock| lock.strong_count() > 0);
-            if let Some(lock) = locks.get(&path).and_then(Weak::upgrade) {
-                lock
-            } else {
+            locks.get(&path).and_then(Weak::upgrade).unwrap_or_else(|| {
                 let lock = Arc::new(Mutex::new(()));
                 locks.insert(path.clone(), Arc::downgrade(&lock));
                 lock
-            }
+            })
         };
         let _guard = lock.lock().await;
         let metadata = match &mutation {
             Mutation::Marker(marker, _) => json!({"markerName":marker}),
-            _ => json!({}),
+            Mutation::Create(..)
+            | Mutation::Replace(..)
+            | Mutation::Frontmatter(_)
+            | Mutation::Delete
+            | Mutation::HardDelete => json!({}),
         };
         let input = AuditInput {
             operation: mutation.name().into(),
@@ -256,18 +258,18 @@ impl VaultWriter {
             let error = result.as_ref().err().map(ToString::to_string);
             let _completion = tokio::task::spawn_blocking(move || {
                 if let Some(hash) = hash {
-                    if let Some(attempt) = attempt {
-                        if let Err(error) = audit.record_write_succeeded(&attempt, &hash) {
-                            tracing::error!(%error,"write audit completion failed");
-                        }
+                    if let Some(attempt) = attempt
+                        && let Err(error) = audit.record_write_succeeded(&attempt, &hash)
+                    {
+                        tracing::error!(%error,"write audit completion failed");
                     }
                     if let Err(error) = audit.record_write(&input, &hash) {
                         tracing::error!(%error,"write provenance failed");
                     }
-                } else if let (Some(attempt), Some(error)) = (attempt, error) {
-                    if let Err(error) = audit.record_write_failed(&attempt, &error) {
-                        tracing::error!(%error,"write audit failure event failed");
-                    }
+                } else if let (Some(attempt), Some(error)) = (attempt, error)
+                    && let Err(error) = audit.record_write_failed(&attempt, &error)
+                {
+                    tracing::error!(%error,"write audit failure event failed");
                 }
             })
             .await;
@@ -368,10 +370,10 @@ impl VaultWriter {
                 ));
             }
             Mutation::Replace(content, fm) => with_frontmatter(content, fm)?,
-            Mutation::Frontmatter(patch) => {
+            Mutation::Frontmatter(updates) => {
                 let mut parsed = parse_markdown(&current);
                 parsed.frontmatter.extend(
-                    patch
+                    updates
                         .iter()
                         .map(|(key, value)| (key.clone(), value.clone())),
                 );
@@ -477,10 +479,10 @@ impl VaultWriter {
             Ok(())
         }
         .await;
-        if let Err(e) = tokio::fs::remove_file(&temp).await {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!(error=%e,"temporary write cleanup failed");
-            }
+        if let Err(e) = tokio::fs::remove_file(&temp).await
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(error=%e,"temporary write cleanup failed");
         }
         result
     }
@@ -548,7 +550,10 @@ pub fn with_frontmatter(
             FrontmatterValue::String(text) => json!(text).to_string(),
             FrontmatterValue::Bool(value) => value.to_string(),
         };
-        output.push_str(&format!("{key}: {encoded}\n"));
+        output.push_str(key);
+        output.push_str(": ");
+        output.push_str(&encoded);
+        output.push('\n');
     }
     output.push_str("---\n");
     output.push_str(content);

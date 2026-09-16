@@ -589,6 +589,55 @@ fn optional_bool(args: &Map<String, Value>, key: &str) -> Result<Option<bool>, D
     }
 }
 
+fn require_text(args: &Map<String, Value>, key: &str) -> Result<String, DispatchError> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| DispatchError::Invalid(format!("{key} must be a string")))
+}
+fn frontmatter_arg(
+    args: &Map<String, Value>,
+    key: &str,
+) -> Result<
+    Option<std::collections::BTreeMap<String, crate::vault::markdown::FrontmatterValue>>,
+    DispatchError,
+> {
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+    let map = value
+        .as_object()
+        .ok_or_else(|| DispatchError::Invalid(format!("{key} must be an object")))?;
+    let mut result = std::collections::BTreeMap::new();
+    for (name, value) in map {
+        use crate::vault::markdown::FrontmatterValue as F;
+        let parsed = match value {
+            Value::String(v) => F::String(v.clone()),
+            Value::Bool(v) => F::Bool(*v),
+            Value::Number(v) => F::Number(
+                v.as_f64()
+                    .ok_or_else(|| DispatchError::Invalid("invalid frontmatter number".into()))?,
+            ),
+            Value::Array(v) => F::List(
+                v.iter()
+                    .map(|v| {
+                        v.as_str().map(str::to_owned).ok_or_else(|| {
+                            DispatchError::Invalid("frontmatter arrays must contain strings".into())
+                        })
+                    })
+                    .collect::<Result<_, _>>()?,
+            ),
+            Value::Null | Value::Object(_) => {
+                return Err(DispatchError::Invalid(
+                    "unsupported frontmatter value".into(),
+                ));
+            }
+        };
+        result.insert(name.clone(), parsed);
+    }
+    Ok(Some(result))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -697,53 +746,4 @@ mod tests {
             Err(DispatchError::UnknownTool(_))
         ));
     }
-}
-
-fn require_text(args: &Map<String, Value>, key: &str) -> Result<String, DispatchError> {
-    args.get(key)
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| DispatchError::Invalid(format!("{key} must be a string")))
-}
-fn frontmatter_arg(
-    args: &Map<String, Value>,
-    key: &str,
-) -> Result<
-    Option<std::collections::BTreeMap<String, crate::vault::markdown::FrontmatterValue>>,
-    DispatchError,
-> {
-    let Some(value) = args.get(key) else {
-        return Ok(None);
-    };
-    let map = value
-        .as_object()
-        .ok_or_else(|| DispatchError::Invalid(format!("{key} must be an object")))?;
-    let mut result = std::collections::BTreeMap::new();
-    for (name, value) in map {
-        use crate::vault::markdown::FrontmatterValue as F;
-        let parsed = match value {
-            Value::String(v) => F::String(v.clone()),
-            Value::Bool(v) => F::Bool(*v),
-            Value::Number(v) => F::Number(
-                v.as_f64()
-                    .ok_or_else(|| DispatchError::Invalid("invalid frontmatter number".into()))?,
-            ),
-            Value::Array(v) => F::List(
-                v.iter()
-                    .map(|v| {
-                        v.as_str().map(str::to_owned).ok_or_else(|| {
-                            DispatchError::Invalid("frontmatter arrays must contain strings".into())
-                        })
-                    })
-                    .collect::<Result<_, _>>()?,
-            ),
-            Value::Null | Value::Object(_) => {
-                return Err(DispatchError::Invalid(
-                    "unsupported frontmatter value".into(),
-                ));
-            }
-        };
-        result.insert(name.clone(), parsed);
-    }
-    Ok(Some(result))
 }
