@@ -13,8 +13,14 @@ keys are test-only and have no deployment use.
 
 After implementation, the first seven focused tests passed. A subsequent signed
 `exp == now` boundary test failed: jsonwebtoken's default strict-less comparison
-accepted the token at its expiration second. Setting the exclusive expiry margin
-fixed that mismatch. The current focused suite also covers missing and mistyped
+accepted the token at its expiration second. An initial exclusive expiry margin
+fixed integer expiry, but independent review later found that library rounding
+still diverged for fractional NumericDates. Signed regression tests then failed
+for issuer arrays, malformed issued-at values, fractional timestamp boundaries,
+and incorrect EC curve metadata. The final verifier checks registered claims
+after signature verification using raw numbers and a deterministic test clock;
+ES256 additionally requires P-256 metadata. The audience-array membership check
+matches jose, including mixed arrays containing the expected string. The current focused suite also covers missing and mistyped
 claims, both signing algorithms, untrusted issuer/audience, algorithm confusion,
 key metadata, critical headers, exact payload limits, cache TTL and rollover,
 failed refreshes, multiple issuers, and concurrent single-fetch behavior.

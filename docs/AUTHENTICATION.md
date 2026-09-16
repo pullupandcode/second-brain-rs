@@ -102,3 +102,10 @@ present but does not require it. Persistent caches, bounded fetches, guarded
 rollover, and sanitized failures are deliberate safety improvements. Verification
 uses jsonwebtoken with AWS-LC, avoiding the RustCrypto RSA dependency affected by
 RUSTSEC-2023-0071. See the scope report for test and mutation evidence.
+
+Registered claim validation runs after cryptographic verification. Issuer must be
+an exact string; `exp` is required and numeric, `nbf` and `iat` must be numeric
+when present. Fractional expiry and not-before values are compared without
+rounding against the current whole epoch second, matching jose. ES256 keys must
+declare the P-256 curve. Audience may be the expected string or an array that
+contains it; scopes remain separately validated.

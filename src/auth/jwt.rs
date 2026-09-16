@@ -85,6 +85,7 @@ pub struct JwtAuthenticator {
     ttl: Duration,
     issuers: Vec<Issuer>,
     fetcher: Arc<dyn JwksFetcher>,
+    clock: fn() -> u64,
 }
 
 impl std::fmt::Debug for JwtAuthenticator {
@@ -153,6 +154,7 @@ impl JwtAuthenticator {
             ttl: Duration::from_secs(config.jwks_cache_ttl_seconds),
             issuers,
             fetcher,
+            clock: jsonwebtoken::get_current_timestamp,
         })
     }
 
@@ -227,16 +229,19 @@ impl JwtAuthenticator {
                 continue;
             };
             let mut validation = Validation::new(header.alg);
-            validation.leeway = 0;
-            // NumericDate expiry is exclusive: exp == current second is expired.
-            validation.reject_tokens_expiring_in_less_than = 1;
-            validation.validate_nbf = true;
-            validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
-            validation.set_issuer(&[&issuer.name]);
-            validation.set_audience(&[&self.audience]);
+            // Keep signature/algorithm verification enabled. Registered claims are
+            // checked below using raw JSON numbers: the library rounds NumericDate
+            // values and accepts issuer arrays, unlike the pinned jose reference.
+            validation.required_spec_claims.clear();
+            validation.validate_exp = false;
+            validation.validate_nbf = false;
+            validation.validate_aud = false;
             let Ok(data) = decode::<Value>(token, &key, &validation) else {
                 continue;
             };
+            if !valid_claims(&data.claims, &issuer.name, &self.audience, (self.clock)()) {
+                continue;
+            }
             let Some(subject) = data
                 .claims
                 .get("sub")
@@ -314,16 +319,36 @@ fn compatible(key: &Jwk, header: &Header) -> bool {
     {
         return false;
     }
-    matches!(
-        (&key.algorithm, header.alg),
-        (
-            jsonwebtoken::jwk::AlgorithmParameters::RSA(_),
-            Algorithm::RS256
-        ) | (
-            jsonwebtoken::jwk::AlgorithmParameters::EllipticCurve(_),
-            Algorithm::ES256
-        )
-    )
+    match (&key.algorithm, header.alg) {
+        (jsonwebtoken::jwk::AlgorithmParameters::RSA(_), Algorithm::RS256) => true,
+        (jsonwebtoken::jwk::AlgorithmParameters::EllipticCurve(ec), Algorithm::ES256) => {
+            ec.curve == jsonwebtoken::jwk::EllipticCurve::P256
+        }
+        _ => false,
+    }
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "NumericDate follows JavaScript number comparison semantics"
+)]
+fn valid_claims(claims: &Value, issuer: &str, audience: &str, now: u64) -> bool {
+    let now = now as f64;
+    let audience_matches = match claims.get("aud") {
+        Some(Value::String(value)) => value == audience,
+        Some(Value::Array(values)) => values.iter().any(|value| value.as_str() == Some(audience)),
+        _ => false,
+    };
+    claims.get("iss").and_then(Value::as_str) == Some(issuer)
+        && audience_matches
+        && claims
+            .get("exp")
+            .and_then(Value::as_f64)
+            .is_some_and(|exp| exp > now)
+        && claims
+            .get("nbf")
+            .is_none_or(|nbf| nbf.as_f64().is_some_and(|nbf| nbf <= now))
+        && claims.get("iat").is_none_or(Value::is_number)
 }
 
 fn claim_scopes(value: Option<&Value>) -> HashSet<Scope> {
@@ -340,4 +365,159 @@ fn claim_scopes(value: Option<&Value>) -> HashSet<Scope> {
 
 fn invalid() -> AuthError {
     AuthError::invalid("Invalid bearer token")
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use jsonwebtoken::{EncodingKey, encode};
+    use serde_json::json;
+
+    use super::*;
+
+    struct StaticKeys(String);
+    impl JwksFetcher for StaticKeys {
+        fn fetch<'a>(&'a self, _endpoint: &'a Url) -> JwksFuture<'a> {
+            Box::pin(std::future::ready(Ok(self.0.clone())))
+        }
+    }
+    fn setup(curve: Option<&str>) -> JwtAuthenticator {
+        let fixtures: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/jwt.json")).unwrap();
+        let mut keys = fixtures["jwks"].clone();
+        if let Some(curve) = curve {
+            for key in keys["keys"].as_array_mut().unwrap() {
+                if key["kty"] == "EC" {
+                    key["crv"] = curve.into();
+                }
+            }
+        }
+        let config =
+            crate::config::parse_config(include_str!("../../tests/fixtures/auth-config.toml"))
+                .unwrap();
+        JwtAuthenticator::with_fetcher(&config.auth, Arc::new(StaticKeys(keys.to_string())))
+            .unwrap()
+    }
+    fn claims() -> Value {
+        json!({"iss":"https://idp.example.com/o/sb/", "aud":"second-brain-rs", "sub":"review-user", "exp":4_102_444_800_u64})
+    }
+    fn signed(claims: &Value, algorithm: Algorithm) -> String {
+        let key = if algorithm == Algorithm::ES256 {
+            EncodingKey::from_ec_pem(include_bytes!("../../tests/fixtures/ec-test-only.pem"))
+                .unwrap()
+        } else {
+            EncodingKey::from_rsa_pem(include_bytes!("../../tests/fixtures/rsa-test-only.pem"))
+                .unwrap()
+        };
+        format!(
+            "Bearer {}",
+            encode(&Header::new(algorithm), claims, &key).unwrap()
+        )
+    }
+    #[tokio::test]
+    async fn registered_claim_shapes_match_jose() {
+        let auth = setup(None);
+        for (field, value) in [
+            ("iss", json!(["https://idp.example.com/o/sb/"])),
+            (
+                "iss",
+                json!([
+                    "https://untrusted.example/",
+                    "https://idp.example.com/o/sb/"
+                ]),
+            ),
+            ("iat", json!("yesterday")),
+            ("iat", Value::Null),
+            ("iat", json!([])),
+            ("iat", json!(true)),
+            ("iat", json!({})),
+            ("iss", Value::Null),
+            ("iss", json!(12)),
+            ("exp", Value::Null),
+            ("exp", json!(false)),
+            ("exp", json!([])),
+            ("nbf", Value::Null),
+            ("nbf", json!(false)),
+            ("nbf", json!([])),
+        ] {
+            let mut payload = claims();
+            payload[field] = value;
+            assert!(
+                auth.authenticate(Some(&signed(&payload, Algorithm::RS256)))
+                    .await
+                    .is_err(),
+                "{field}: {}",
+                payload[field]
+            );
+        }
+        for value in [json!(0), json!(-1.25), json!(4_102_444_800_u64)] {
+            let mut payload = claims();
+            payload["iat"] = value;
+            assert!(
+                auth.authenticate(Some(&signed(&payload, Algorithm::RS256)))
+                    .await
+                    .is_ok()
+            );
+        }
+    }
+    #[tokio::test]
+    async fn audience_string_and_array_membership_match_jose() {
+        let auth = setup(None);
+        for (audience, accepted) in [
+            (json!("second-brain-rs"), true),
+            (json!(["other", "second-brain-rs"]), true),
+            (json!([null, "second-brain-rs"]), true),
+            (json!(["other"]), false),
+            (json!([]), false),
+            (Value::Null, false),
+            (json!(123), false),
+        ] {
+            let mut payload = claims();
+            payload["aud"] = audience;
+            assert_eq!(
+                auth.authenticate(Some(&signed(&payload, Algorithm::RS256)))
+                    .await
+                    .is_ok(),
+                accepted,
+                "{}",
+                payload["aud"]
+            );
+        }
+    }
+    #[tokio::test]
+    async fn fractional_numeric_dates_use_unrounded_comparison() {
+        let mut auth = setup(None);
+        auth.clock = || 100;
+        for (exp, nbf, accepted) in [
+            (100.25, 100.0, true),
+            (100.0, 100.0, false),
+            (100.75, 100.25, false),
+            (101.0, 99.75, true),
+            (4_102_444_800.0, 100.25, false),
+            (99.75, 0.0, false),
+            (101.0, -0.25, true),
+        ] {
+            let mut payload = claims();
+            payload["exp"] = json!(exp);
+            payload["nbf"] = json!(nbf);
+            assert_eq!(
+                auth.authenticate(Some(&signed(&payload, Algorithm::RS256)))
+                    .await
+                    .is_ok(),
+                accepted,
+                "exp={exp}, nbf={nbf}"
+            );
+        }
+    }
+    #[tokio::test]
+    async fn es256_requires_p256_curve_metadata() {
+        let token = signed(&claims(), Algorithm::ES256);
+        assert!(setup(None).authenticate(Some(&token)).await.is_ok());
+        for curve in ["P-384", "P-521", "Ed25519"] {
+            assert!(
+                setup(Some(curve)).authenticate(Some(&token)).await.is_err(),
+                "{curve}"
+            );
+        }
+    }
 }
