@@ -23,8 +23,8 @@ Implemented tools: `read_note`, `list_folder`, `search`, `get_backlinks`,
 `get_outgoing_links`, `list_vault_conflicts`, `link_to_page`, `get_vault_structure`
 (folder data; record types arrive in v0.4), `skills_list`, `skills_reload`, and
 three optional OCR tools. Note mutations include `create_note`, `replace_note`,
-`update_frontmatter`, `insert_under_heading`, `append_to_section`, and
-`delete_note`, and `hard_delete_note`; admin tools expose write-failure and recovery diagnostics.
+`update_frontmatter`, `replace_section_by_marker`, `delete_note`, and
+`hard_delete_note`. Admins can inspect `list_write_recovery_diagnostics`.
 Empty folder paths select the root; empty queries list
 indexed notes. The index is rebuilt at startup and after server mutations; external file edits
 require a restart to refresh search. Writes use `base_sha256` for optimistic

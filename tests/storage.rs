@@ -483,11 +483,13 @@ async fn canonical_case_aliases_cannot_bypass_blocking_or_quarantine() {
         );
         assert!(!root.join("Private/injected.md").exists());
     } else {
-        // These are distinct paths on a case-sensitive filesystem.
-        assert!(
+        // Hard-deny patterns deliberately ignore case on every filesystem.
+        assert_eq!(
             w.create_note("private/allowed.md", "good", None)
                 .await
-                .is_ok()
+                .unwrap_err()
+                .code(),
+            "path_blocked"
         );
     }
 }
