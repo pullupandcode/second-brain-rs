@@ -6,6 +6,7 @@
 
 pub mod auth;
 pub mod config;
+mod framework;
 pub mod http;
 pub mod mcp;
 pub mod observability;
