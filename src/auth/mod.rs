@@ -13,8 +13,7 @@ use crate::{
 
 /// Build the authenticator selected by `config.auth.mode`.
 ///
-/// The JWT-backed authenticator lands in Phase 5; until then the `Jwt` mode
-/// uses a no-scope development authenticator so the server starts cleanly.
+/// JWT mode fails closed until the production verifier is available.
 #[must_use]
 pub fn build_authenticator(config: &ServerConfig) -> Arc<dyn Authenticator> {
     match config.auth.mode {
@@ -26,7 +25,7 @@ pub fn build_authenticator(config: &ServerConfig) -> Arc<dyn Authenticator> {
                 .copied()
                 .collect(),
         )),
-        AuthMode::Jwt => Arc::new(DevAuthenticator::new(HashSet::new())),
+        AuthMode::Jwt => Arc::new(UnavailableJwt),
     }
 }
 
@@ -103,4 +102,14 @@ pub trait Authenticator: Send + Sync {
     /// # Errors
     /// Returns [`AuthError`] when the token is missing or invalid.
     fn authenticate(&self, authorization: Option<&str>) -> Result<AuthContext, AuthError>;
+}
+
+#[derive(Debug)]
+struct UnavailableJwt;
+impl Authenticator for UnavailableJwt {
+    fn authenticate(&self, _authorization: Option<&str>) -> Result<AuthContext, AuthError> {
+        Err(AuthError::invalid(
+            "JWT authentication is unavailable in this release",
+        ))
+    }
 }

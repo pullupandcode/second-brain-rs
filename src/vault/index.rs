@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use rusqlite::{Connection, params};
 use serde::Serialize;
 
-use crate::vault::policy::path_matches_any_pattern;
+use crate::vault::policy::PathPolicy;
 
 const SCHEMA: &str = "\
 CREATE TABLE IF NOT EXISTS notes (
@@ -88,6 +88,7 @@ pub struct SearchResult {
     /// Vault-relative path.
     pub path: String,
     /// Title, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// Tags.
     pub tags: Vec<String>,
@@ -110,7 +111,7 @@ pub struct VaultConflict {
 /// A rebuildable SQLite index with blocked-path result filtering.
 pub struct VaultIndex {
     connection: Mutex<Connection>,
-    blocked_paths: Vec<String>,
+    blocked_paths: PathPolicy,
 }
 
 impl std::fmt::Debug for VaultIndex {
@@ -127,6 +128,16 @@ impl VaultIndex {
     /// # Errors
     /// [`IndexError::Sqlite`] on connection or schema failure.
     pub fn open(sqlite_path: &str, blocked_paths: Vec<String>) -> Result<Self, IndexError> {
+        Self::open_with_policy(sqlite_path, PathPolicy::new(blocked_paths))
+    }
+
+    /// Open an index sharing the effective privacy policy.
+    /// # Errors
+    /// Returns an error if SQLite cannot be opened or initialized.
+    pub fn open_with_policy(
+        sqlite_path: &str,
+        blocked_paths: PathPolicy,
+    ) -> Result<Self, IndexError> {
         let connection = Connection::open(sqlite_path)?;
         connection.execute_batch(SCHEMA)?;
         Ok(Self {
@@ -136,7 +147,7 @@ impl VaultIndex {
     }
 
     fn is_blocked(&self, path: &str) -> bool {
-        path_matches_any_pattern(&self.blocked_paths, path)
+        self.blocked_paths.is_blocked(path)
     }
 
     /// Clear and repopulate the index from `notes` and `conflicts`.
@@ -346,7 +357,7 @@ impl VaultIndex {
         let mut grouped: Vec<VaultConflict> = Vec::new();
         for row in rows {
             let (canonical, conflict) = row?;
-            if self.is_blocked(&canonical) {
+            if self.is_blocked(&canonical) || self.is_blocked(&conflict) {
                 continue;
             }
             match grouped.last_mut() {

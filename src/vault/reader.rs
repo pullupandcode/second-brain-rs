@@ -1,6 +1,6 @@
 //! Async vault reader: note reads (with hash + parse) and folder listing.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use crate::vault::{
     markdown::{ParsedMarkdown, parse_markdown},
     path::{VaultPathError, is_markdown_path, normalize_vault_path, resolve_existing_vault_path},
-    policy::path_matches_any_pattern,
+    policy::{PathPolicy, path_matches_any_pattern},
 };
 
 /// Errors from reading the vault.
@@ -86,17 +86,24 @@ pub struct VaultReaderOptions {
 pub struct VaultReader {
     vault_root: PathBuf,
     ignored_globs: Vec<String>,
-    blocked_paths: Vec<String>,
+    blocked_paths: PathPolicy,
 }
 
 impl VaultReader {
     /// Construct a reader.
     #[must_use]
     pub fn new(options: VaultReaderOptions) -> Self {
+        let policy = PathPolicy::new(options.blocked_paths.clone());
+        Self::with_policy(options, policy)
+    }
+
+    /// Construct a reader sharing a dynamically reloadable denylist.
+    #[must_use]
+    pub fn with_policy(options: VaultReaderOptions, policy: PathPolicy) -> Self {
         Self {
             vault_root: options.vault_root,
             ignored_globs: options.ignored_globs,
-            blocked_paths: options.blocked_paths,
+            blocked_paths: policy,
         }
     }
 
@@ -109,7 +116,7 @@ impl VaultReader {
     /// Whether a normalized vault path is blocked.
     #[must_use]
     pub fn is_blocked(&self, vault_path: &str) -> bool {
-        path_matches_any_pattern(&self.blocked_paths, vault_path)
+        self.blocked_paths.is_blocked(vault_path)
     }
 
     /// Read a note: content, hex SHA-256, and parsed markdown.
@@ -128,7 +135,25 @@ impl VaultReader {
             return Err(VaultReaderError::NotMarkdown(normalized));
         }
         let resolved = resolve_existing_vault_path(&self.vault_root, &normalized).await?;
+        let root = tokio::fs::canonicalize(&self.vault_root).await?;
+        if let Ok(relative) = resolved.strip_prefix(&root) {
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            if self.is_blocked(&relative) {
+                return Err(VaultReaderError::Blocked);
+            }
+            if self.is_ignored(&relative) {
+                return Err(VaultReaderError::Ignored(relative));
+            }
+        }
         let content = tokio::fs::read_to_string(&resolved).await?;
+        // Reload may have changed the policy while the filesystem read awaited.
+        if self.is_blocked(&normalized)
+            || resolved
+                .strip_prefix(&root)
+                .is_ok_and(|path| self.is_blocked(&path.to_string_lossy().replace('\\', "/")))
+        {
+            return Err(VaultReaderError::Blocked);
+        }
         let current_sha256 = sha256_hex(&content);
         let parsed = parse_markdown(&content);
         Ok(ReadNoteResult {
@@ -151,24 +176,35 @@ impl VaultReader {
         recursive: bool,
     ) -> Result<Vec<FolderEntry>, VaultReaderError> {
         let normalized = normalize_vault_path(input)?;
-        let start = if normalized.is_empty() {
-            self.vault_root.clone()
-        } else {
-            self.vault_root.join(&normalized)
-        };
+        if self.is_blocked(&normalized) {
+            return Err(VaultReaderError::Blocked);
+        }
+        if self.is_ignored(&normalized) {
+            return Err(VaultReaderError::Ignored(normalized));
+        }
+        let start = resolve_existing_vault_path(&self.vault_root, &normalized).await?;
 
+        let root = tokio::fs::canonicalize(&self.vault_root).await?;
+        if let Ok(relative) = start.strip_prefix(&root) {
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            if self.is_blocked(&relative) {
+                return Err(VaultReaderError::Blocked);
+            }
+            if self.is_ignored(&relative) {
+                return Err(VaultReaderError::Ignored(relative));
+            }
+        }
         let mut entries = Vec::new();
         let mut stack = vec![start];
         while let Some(dir) = stack.pop() {
-            let Ok(mut read_dir) = tokio::fs::read_dir(&dir).await else {
-                continue;
-            };
+            let mut read_dir = tokio::fs::read_dir(&dir).await?;
             while let Some(entry) = read_dir.next_entry().await? {
                 let full = entry.path();
                 let metadata = tokio::fs::symlink_metadata(&full).await?;
-                let Some(relative) = self.relative_path(&full) else {
+                let Ok(relative) = full.strip_prefix(&root) else {
                     continue;
                 };
+                let relative = relative.to_string_lossy().replace('\\', "/");
                 if self.is_ignored(&relative) || self.is_blocked(&relative) {
                     continue;
                 }
@@ -189,13 +225,9 @@ impl VaultReader {
                 }
             }
         }
+        entries.retain(|entry| !self.is_blocked(&entry.path));
         entries.sort_by(|left, right| left.path.cmp(&right.path));
         Ok(entries)
-    }
-
-    fn relative_path(&self, full: &Path) -> Option<String> {
-        let relative = full.strip_prefix(&self.vault_root).ok()?;
-        Some(relative.to_string_lossy().replace('\\', "/"))
     }
 }
 

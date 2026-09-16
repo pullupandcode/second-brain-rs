@@ -12,6 +12,12 @@ use std::collections::HashSet;
 pub enum Scope {
     /// `vault:read`
     VaultRead,
+    /// `skills:read`
+    SkillsRead,
+    /// `vault:delete`
+    VaultDelete,
+    /// `vault:delete:hard`
+    VaultDeleteHard,
     /// `vault:write`
     VaultWrite,
     /// `vault:capture`
@@ -28,6 +34,9 @@ impl Scope {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::VaultRead => "vault:read",
+            Self::SkillsRead => "skills:read",
+            Self::VaultDelete => "vault:delete",
+            Self::VaultDeleteHard => "vault:delete:hard",
             Self::VaultWrite => "vault:write",
             Self::VaultCapture => "vault:capture",
             Self::DailyAppend => "daily:append",
@@ -45,9 +54,12 @@ impl Scope {
 }
 
 /// All known scopes, in OAuth-discovery order.
-pub const KNOWN_SCOPES: [Scope; 5] = [
+pub const KNOWN_SCOPES: [Scope; 8] = [
     Scope::VaultRead,
+    Scope::SkillsRead,
     Scope::VaultWrite,
+    Scope::VaultDelete,
+    Scope::VaultDeleteHard,
     Scope::VaultCapture,
     Scope::DailyAppend,
     Scope::Admin,

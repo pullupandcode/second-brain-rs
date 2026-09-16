@@ -1,0 +1,558 @@
+{
+  "read_note": {
+    "type": "object",
+    "required": [
+      "path"
+    ],
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Vault-relative markdown path."
+      }
+    },
+    "additionalProperties": false
+  },
+  "create_note": {
+    "type": "object",
+    "required": [
+      "path",
+      "content"
+    ],
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Vault-relative markdown path."
+      },
+      "content": {
+        "type": "string",
+        "description": "Full note content."
+      },
+      "frontmatter": {
+        "type": "object",
+        "description": "Optional frontmatter fields."
+      }
+    },
+    "additionalProperties": false
+  },
+  "replace_note": {
+    "type": "object",
+    "required": [
+      "path",
+      "content",
+      "base_sha256"
+    ],
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Vault-relative markdown path."
+      },
+      "content": {
+        "type": "string",
+        "description": "Replacement note content."
+      },
+      "base_sha256": {
+        "type": "string",
+        "description": "Current note SHA-256 for optimistic concurrency."
+      },
+      "frontmatter": {
+        "type": "object",
+        "description": "Optional replacement frontmatter fields."
+      }
+    },
+    "additionalProperties": false
+  },
+  "delete_note": {
+    "type": "object",
+    "required": [
+      "path",
+      "base_sha256"
+    ],
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Vault-relative markdown path."
+      },
+      "base_sha256": {
+        "type": "string",
+        "description": "Current note SHA-256 for optimistic concurrency."
+      }
+    },
+    "additionalProperties": false
+  },
+  "hard_delete_note": {
+    "type": "object",
+    "required": [
+      "path",
+      "base_sha256"
+    ],
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Vault-relative markdown path."
+      },
+      "base_sha256": {
+        "type": "string",
+        "description": "Current note SHA-256 for optimistic concurrency."
+      }
+    },
+    "additionalProperties": false
+  },
+  "list_folder": {
+    "type": "object",
+    "required": [
+      "path"
+    ],
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Vault-relative folder path. Use an empty string for the vault root."
+      },
+      "recursive": {
+        "type": "boolean",
+        "description": "Whether to list folders recursively."
+      }
+    },
+    "additionalProperties": false
+  },
+  "search": {
+    "type": "object",
+    "required": [
+      "query"
+    ],
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Search query."
+      },
+      "filters": {
+        "type": "object",
+        "description": "Optional search filters, such as a folder prefix."
+      }
+    },
+    "additionalProperties": false
+  },
+  "get_backlinks": {
+    "type": "object",
+    "required": [
+      "path"
+    ],
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Vault-relative markdown path."
+      }
+    },
+    "additionalProperties": false
+  },
+  "get_outgoing_links": {
+    "type": "object",
+    "required": [
+      "path"
+    ],
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Vault-relative markdown path."
+      }
+    },
+    "additionalProperties": false
+  },
+  "update_frontmatter": {
+    "type": "object",
+    "required": [
+      "path",
+      "patch",
+      "base_sha256"
+    ],
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Vault-relative markdown path."
+      },
+      "patch": {
+        "type": "object",
+        "description": "Frontmatter keys and values to merge."
+      },
+      "base_sha256": {
+        "type": "string",
+        "description": "Current note SHA-256 for optimistic concurrency."
+      }
+    },
+    "additionalProperties": false
+  },
+  "replace_section_by_marker": {
+    "type": "object",
+    "required": [
+      "path",
+      "marker_name",
+      "content",
+      "base_sha256"
+    ],
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Vault-relative markdown path."
+      },
+      "marker_name": {
+        "type": "string",
+        "description": "MCP marker section name."
+      },
+      "content": {
+        "type": "string",
+        "description": "Replacement section content."
+      },
+      "base_sha256": {
+        "type": "string",
+        "description": "Current note SHA-256 for optimistic concurrency."
+      }
+    },
+    "additionalProperties": false
+  },
+  "list_vault_conflicts": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "inbox_capture": {
+    "type": "object",
+    "required": [
+      "content",
+      "source_client"
+    ],
+    "properties": {
+      "content": {
+        "type": "string",
+        "description": "Markdown content to capture."
+      },
+      "source_client": {
+        "type": "string",
+        "description": "Client or integration creating the capture."
+      },
+      "date": {
+        "type": "string",
+        "description": "Optional ISO date or datetime. Defaults to now."
+      },
+      "source_id": {
+        "type": "string",
+        "description": "Optional stable source identifier for deduplication."
+      },
+      "capture_type": {
+        "type": "string",
+        "description": "Optional capture category."
+      },
+      "title": {
+        "type": "string",
+        "description": "Optional capture title."
+      },
+      "strategy": {
+        "type": "string",
+        "enum": [
+          "create",
+          "replace_by_source_id"
+        ],
+        "description": "Optional inbox capture strategy."
+      }
+    },
+    "additionalProperties": false
+  },
+  "capture_for_date": {
+    "type": "object",
+    "required": [
+      "content",
+      "source_client"
+    ],
+    "properties": {
+      "content": {
+        "type": "string",
+        "description": "Markdown content to capture."
+      },
+      "source_client": {
+        "type": "string",
+        "description": "Client or integration creating the capture."
+      },
+      "date": {
+        "type": "string",
+        "description": "Optional ISO date or datetime. Defaults to now."
+      },
+      "source_id": {
+        "type": "string",
+        "description": "Optional stable source identifier for deduplication."
+      },
+      "capture_type": {
+        "type": "string",
+        "description": "Optional capture category."
+      },
+      "title": {
+        "type": "string",
+        "description": "Optional capture title."
+      }
+    },
+    "additionalProperties": false
+  },
+  "daily_note_get": {
+    "type": "object",
+    "properties": {
+      "date": {
+        "type": "string",
+        "description": "Optional ISO date. Defaults to today."
+      }
+    },
+    "additionalProperties": false
+  },
+  "daily_note_append": {
+    "type": "object",
+    "required": [
+      "content",
+      "base_sha256"
+    ],
+    "properties": {
+      "content": {
+        "type": "string",
+        "description": "Markdown content to append to the daily note section."
+      },
+      "base_sha256": {
+        "type": "string",
+        "description": "Current daily note SHA-256 for optimistic concurrency."
+      },
+      "date": {
+        "type": "string",
+        "description": "Optional ISO date. Defaults to today."
+      },
+      "section": {
+        "type": "string",
+        "description": "Optional configured daily note section name."
+      }
+    },
+    "additionalProperties": false
+  },
+  "daily_note_repair_markers": {
+    "type": "object",
+    "required": [
+      "base_sha256"
+    ],
+    "properties": {
+      "base_sha256": {
+        "type": "string",
+        "description": "Current daily note SHA-256 for optimistic concurrency."
+      },
+      "date": {
+        "type": "string",
+        "description": "Optional ISO date. Defaults to today."
+      }
+    },
+    "additionalProperties": false
+  },
+  "create_record": {
+    "type": "object",
+    "required": [
+      "type",
+      "title"
+    ],
+    "properties": {
+      "type": {
+        "type": "string",
+        "description": "Framework record type, such as capture, map, project, or source."
+      },
+      "title": {
+        "type": "string",
+        "description": "Record title."
+      },
+      "date": {
+        "type": "string",
+        "description": "Optional ISO date or datetime. Defaults to now."
+      },
+      "body": {
+        "type": "string",
+        "description": "Optional note body appended after any configured template."
+      },
+      "fields": {
+        "type": "object",
+        "description": "Optional frontmatter fields."
+      }
+    },
+    "additionalProperties": false
+  },
+  "find_maps": {
+    "type": "object",
+    "properties": {
+      "topic": {
+        "type": "string",
+        "description": "Optional topic query."
+      }
+    },
+    "additionalProperties": false
+  },
+  "list_record_types": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "get_vault_structure": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "link_to_page": {
+    "type": "object",
+    "required": [
+      "notebook",
+      "page_uuid"
+    ],
+    "properties": {
+      "notebook": {
+        "type": "string",
+        "description": "Notebook UUID or identifier."
+      },
+      "page_uuid": {
+        "type": "string",
+        "description": "Page UUID."
+      }
+    },
+    "additionalProperties": false
+  },
+  "list_write_recovery_diagnostics": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "skills_list": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "skills_reload": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "framework_init": {
+    "type": "object",
+    "required": [
+      "framework"
+    ],
+    "properties": {
+      "framework": {
+        "type": "string",
+        "enum": [
+          "lyt",
+          "para",
+          "zettel"
+        ],
+        "description": "Framework preset to initialize."
+      },
+      "output_path": {
+        "type": "string",
+        "description": "Optional vault-relative schema output path."
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "create",
+          "overwrite"
+        ],
+        "description": "Optional initialization mode."
+      }
+    },
+    "additionalProperties": false
+  },
+  "framework_reload": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "framework_register": {
+    "type": "object",
+    "required": [
+      "name",
+      "path"
+    ],
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "Overlay name."
+      },
+      "path": {
+        "type": "string",
+        "description": "Vault-relative overlay schema path."
+      },
+      "priority": {
+        "type": "integer",
+        "description": "Optional overlay priority. Lower values load first."
+      }
+    },
+    "additionalProperties": false
+  },
+  "framework_unregister": {
+    "type": "object",
+    "required": [
+      "name"
+    ],
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "Overlay name to unregister."
+      }
+    },
+    "additionalProperties": false
+  },
+  "framework_list": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "framework_compose": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "ocr_notebook": {
+    "type": "object",
+    "required": [
+      "identifier"
+    ],
+    "properties": {
+      "identifier": {
+        "type": "string",
+        "description": "Notebook identifier."
+      },
+      "pages": {
+        "type": "array",
+        "items": {
+          "type": "integer"
+        },
+        "description": "Optional page numbers to OCR."
+      },
+      "force": {
+        "type": "boolean",
+        "description": "Whether to force a new OCR job."
+      }
+    },
+    "additionalProperties": false
+  },
+  "ocr_status": {
+    "type": "object",
+    "required": [
+      "job_id"
+    ],
+    "properties": {
+      "job_id": {
+        "type": "string",
+        "description": "OCR job id."
+      }
+    },
+    "additionalProperties": false
+  },
+  "ocr_renumber_notebook": {
+    "type": "object",
+    "required": [
+      "notebook_id"
+    ],
+    "properties": {
+      "notebook_id": {
+        "type": "string",
+        "description": "Notebook id to renumber."
+      }
+    },
+    "additionalProperties": false
+  }
+}

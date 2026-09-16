@@ -9,7 +9,7 @@ vault_path = "/path/to/vault"
 state_path = "/path/to/state"
 
 [auth]
-mode = "jwt"                          # use "development" only for local loopback testing
+mode = "jwt"                          # fails closed in v0.2; production verifier planned in v0.5
 audience = "second-brain-rs"
 trusted_issuers = ["https://idp.example.com/application/o/second-brain/"]
 discovery_authorization_server = "https://idp.example.com/application/o/second-brain/"
@@ -48,3 +48,11 @@ log_args = false
 
 [framework]
 schema_path = "_meta/framework.yaml"
+
+[skills]
+# Vault-relative maps linking to private skill notes; exposed only via skills:read prompts.
+map_paths = []
+
+[security]
+# Hard denylist applied to reads, search and (when enabled) writes.
+blocked_paths = []

@@ -9,9 +9,11 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     config::ServerConfig,
+    skills::{LoadedSkill, SkillLoad, load_skills},
     vault::{
         index::{ConflictPair, NoteRecord, SearchFilters, VaultIndex, canonical_conflict_path},
         path::is_markdown_path,
+        policy::PathPolicy,
         reader::{VaultReader, VaultReaderOptions},
     },
 };
@@ -47,6 +49,14 @@ pub enum DispatchError {
     /// Invalid arguments (client-facing message).
     #[error("{0}")]
     Invalid(String),
+    /// A tool contract error with a stable machine-readable discriminator.
+    #[error("{message}")]
+    Coded {
+        /// Stable tool error code.
+        code: &'static str,
+        /// Sanitized client-facing message.
+        message: String,
+    },
     /// Internal failure (message is sanitized before reaching the client).
     #[error("{0}")]
     Internal(String),
@@ -57,6 +67,10 @@ pub struct Runtime {
     config: Arc<ServerConfig>,
     reader: VaultReader,
     index: Arc<VaultIndex>,
+    policy: PathPolicy,
+    skills: tokio::sync::RwLock<SkillLoad>,
+    skill_reload: tokio::sync::Mutex<()>,
+    ocr: crate::ocr::OcrQueue,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -78,27 +92,74 @@ impl Runtime {
             tokio::fs::create_dir_all(parent).await?;
         }
 
+        let skill_reader = VaultReader::new(VaultReaderOptions {
+            vault_root: PathBuf::from(&config.vault_path),
+            ignored_globs: Vec::new(),
+            blocked_paths: Vec::new(),
+        });
+        let skills = load_skills(&skill_reader, &config.skills.map_paths).await;
+        let policy = PathPolicy::new(effective_paths(&config, &skills).await);
         let mut ignored = config.index.ignored_globs.clone();
         ignored.extend(config.index.blocked_paths.iter().cloned());
-        let reader = VaultReader::new(VaultReaderOptions {
-            vault_root: PathBuf::from(&config.vault_path),
-            ignored_globs: ignored,
-            blocked_paths: config.security.blocked_paths.clone(),
-        });
+        let reader = VaultReader::with_policy(
+            VaultReaderOptions {
+                vault_root: PathBuf::from(&config.vault_path),
+                ignored_globs: ignored,
+                blocked_paths: Vec::new(),
+            },
+            policy.clone(),
+        );
 
         let sqlite_path = config.index.sqlite_path.clone();
-        let blocked = config.security.blocked_paths.clone();
-        let index =
-            tokio::task::spawn_blocking(move || VaultIndex::open(&sqlite_path, blocked)).await??;
+        let blocked = policy.clone();
+        let index = tokio::task::spawn_blocking(move || {
+            VaultIndex::open_with_policy(&sqlite_path, blocked)
+        })
+        .await??;
         let index = Arc::new(index);
 
         let runtime = Arc::new(Self {
             config,
             reader,
             index,
+            policy,
+            skills: tokio::sync::RwLock::new(skills),
+            skill_reload: tokio::sync::Mutex::new(()),
+            ocr: crate::ocr::OcrQueue::default(),
         });
         runtime.cold_rebuild().await?;
         Ok(runtime)
+    }
+
+    /// Shared policy used by all reads and mutations, including skill reloads.
+    #[must_use]
+    pub fn path_policy(&self) -> PathPolicy {
+        self.policy.clone()
+    }
+
+    /// Valid loaded skills. Callers must enforce `skills:read` before exposing them.
+    // cancel-safe: the read lock is dropped when cancelled.
+    pub async fn loaded_skills(&self) -> Vec<LoadedSkill> {
+        self.skills.read().await.skills.clone()
+    }
+
+    async fn skills_status(&self) -> Value {
+        json!({"mapPaths": self.config.skills.map_paths, "skills": self.skills.read().await.statuses})
+    }
+
+    async fn reload_skills(&self) -> Result<Value, DispatchError> {
+        let _reload = self.skill_reload.lock().await;
+        let reader = VaultReader::new(VaultReaderOptions {
+            vault_root: PathBuf::from(&self.config.vault_path),
+            ignored_globs: Vec::new(),
+            blocked_paths: Vec::new(),
+        });
+        let load = load_skills(&reader, &self.config.skills.map_paths).await;
+        let paths = effective_paths(&self.config, &load).await;
+        let mut snapshot = self.skills.write().await;
+        self.policy.replace(paths);
+        *snapshot = load;
+        Ok(json!({"mapPaths": self.config.skills.map_paths, "skills": snapshot.statuses}))
     }
 
     async fn cold_rebuild(&self) -> Result<(), RuntimeError> {
@@ -135,6 +196,11 @@ impl Runtime {
         args: &Map<String, Value>,
     ) -> Result<Value, DispatchError> {
         match name {
+            "skills_list" => Ok(self.skills_status().await),
+            "skills_reload" => self.reload_skills().await,
+            "ocr_notebook" | "ocr_status" | "ocr_renumber_notebook" if self.config.ocr.enabled => {
+                self.ocr.dispatch(name, args)
+            }
             "read_note" => self.read_note(args).await,
             "list_folder" => self.list_folder(args).await,
             "search" => self.search(args).await,
@@ -160,7 +226,7 @@ impl Runtime {
     }
 
     async fn list_folder(&self, args: &Map<String, Value>) -> Result<Value, DispatchError> {
-        let path = require_string(args, "path")?;
+        let path = string_allow_empty(args, "path")?;
         let recursive = optional_bool(args, "recursive")?.unwrap_or(false);
         let entries = self
             .reader
@@ -171,8 +237,16 @@ impl Runtime {
     }
 
     async fn search(&self, args: &Map<String, Value>) -> Result<Value, DispatchError> {
-        let query = require_string(args, "query")?;
-        let filters = args.get("filters").and_then(Value::as_object);
+        let query = string_allow_empty(args, "query")?;
+        let filters = match args.get("filters") {
+            None => None,
+            Some(Value::Object(filters)) => Some(filters),
+            Some(_) => {
+                return Err(DispatchError::Invalid(
+                    "filters must be an object".to_owned(),
+                ));
+            }
+        };
         let search_filters = SearchFilters {
             folder: filters
                 .and_then(|f| f.get("folder"))
@@ -270,13 +344,32 @@ impl Runtime {
     }
 }
 
+async fn effective_paths(config: &ServerConfig, load: &SkillLoad) -> Vec<String> {
+    let mut paths = config.security.blocked_paths.clone();
+    paths.extend(config.skills.map_paths.iter().cloned());
+    paths.extend(load.statuses.iter().map(|status| status.path.clone()));
+    // Keep aliases private and also protect their canonical targets from direct reads/writes.
+    if let Ok(root) = tokio::fs::canonicalize(&config.vault_path).await {
+        let candidates = paths.clone();
+        for path in candidates {
+            if let Ok(resolved) =
+                crate::vault::path::resolve_existing_vault_path(&root, &path).await
+                && let Ok(relative) = resolved.strip_prefix(&root)
+            {
+                paths.push(relative.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
 async fn scan_conflicts(vault_root: &Path) -> Result<Vec<ConflictPair>, RuntimeError> {
     let mut pairs = Vec::new();
     let mut stack = vec![vault_root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let Ok(mut read_dir) = tokio::fs::read_dir(&dir).await else {
-            continue;
-        };
+        let mut read_dir = tokio::fs::read_dir(&dir).await?;
         while let Some(entry) = read_dir.next_entry().await? {
             let full = entry.path();
             let metadata = tokio::fs::symlink_metadata(&full).await?;
@@ -305,6 +398,8 @@ fn is_known_later_tool(name: &str) -> bool {
     matches!(
         name,
         "create_note"
+            | "delete_note"
+            | "hard_delete_note"
             | "replace_note"
             | "update_frontmatter"
             | "replace_section_by_marker"
@@ -342,9 +437,16 @@ fn require_string(args: &Map<String, Value>, key: &str) -> Result<String, Dispat
     }
 }
 
+fn string_allow_empty(args: &Map<String, Value>, key: &str) -> Result<String, DispatchError> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| DispatchError::Invalid(format!("{key} must be a string")))
+}
+
 fn optional_bool(args: &Map<String, Value>, key: &str) -> Result<Option<bool>, DispatchError> {
     match args.get(key) {
-        None | Some(Value::Null) => Ok(None),
+        None => Ok(None),
         Some(Value::Bool(value)) => Ok(Some(*value)),
         Some(_) => Err(DispatchError::Invalid(format!("{key} must be a boolean"))),
     }

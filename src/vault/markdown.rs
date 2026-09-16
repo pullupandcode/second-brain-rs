@@ -30,12 +30,14 @@ pub struct ParsedMarkdown {
     /// The note body (frontmatter removed).
     pub body: String,
     /// Title: first `# ` heading, else frontmatter `title`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// Tags from the body and frontmatter (deduped, in first-seen order).
     pub tags: Vec<String>,
     /// Aliases from frontmatter.
     pub aliases: Vec<String>,
     /// Stable source id from frontmatter, when non-empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source_id: Option<String>,
     /// Outgoing wikilink targets (deduped).
     pub outgoing_links: Vec<String>,
@@ -73,7 +75,7 @@ pub fn parse_markdown(source: &str) -> ParsedMarkdown {
         Some(FrontmatterValue::String(value)) if !value.is_empty() => Some(value.clone()),
         _ => None,
     };
-    let outgoing_links = extract_links(&normalized);
+    let outgoing_links = extract_links(body);
 
     ParsedMarkdown {
         frontmatter,
@@ -116,7 +118,7 @@ fn parse_frontmatter(block: &str) -> BTreeMap<String, FrontmatterValue> {
                 let Some(item) = ARRAY_ITEM.captures(next).and_then(|c| c.get(1)) else {
                     break;
                 };
-                items.push(strip_quotes(item.as_str().trim()).to_owned());
+                items.push(decode_string(item.as_str().trim()));
                 cursor += 1;
             }
             if items.is_empty() {
@@ -134,11 +136,14 @@ fn parse_frontmatter(block: &str) -> BTreeMap<String, FrontmatterValue> {
 
 fn parse_scalar(raw: &str) -> FrontmatterValue {
     if let Some(inner) = raw.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        if let Ok(items) = serde_json::from_str::<Vec<String>>(raw) {
+            return FrontmatterValue::List(items);
+        }
         let items = inner
             .split(',')
             .map(str::trim)
             .filter(|item| !item.is_empty())
-            .map(|item| strip_quotes(item).to_owned())
+            .map(decode_string)
             .collect();
         return FrontmatterValue::List(items);
     }
@@ -150,12 +155,16 @@ fn parse_scalar(raw: &str) -> FrontmatterValue {
     if let Some(number) = parse_number(raw) {
         return FrontmatterValue::Number(number);
     }
-    FrontmatterValue::String(strip_quotes(raw).to_owned())
+    FrontmatterValue::String(decode_string(raw))
 }
 
 fn parse_number(raw: &str) -> Option<f64> {
     let value: f64 = raw.parse().ok()?;
     (value.is_finite() && value.to_string() == raw).then_some(value)
+}
+
+fn decode_string(value: &str) -> String {
+    serde_json::from_str::<String>(value).unwrap_or_else(|_| strip_quotes(value).to_owned())
 }
 
 fn strip_quotes(value: &str) -> &str {
@@ -171,14 +180,14 @@ fn extract_title(body: &str) -> Option<String> {
 
 fn extract_tags(body: &str, frontmatter: &BTreeMap<String, FrontmatterValue>) -> Vec<String> {
     let mut tags = Vec::new();
-    for captures in TAG.captures_iter(body) {
-        if let Some(tag) = captures.get(1) {
-            push_unique(&mut tags, tag.as_str().to_owned());
-        }
-    }
     for key in ["tags", "tag"] {
         for tag in string_list(frontmatter.get(key)) {
             push_unique(&mut tags, tag);
+        }
+    }
+    for captures in TAG.captures_iter(body) {
+        if let Some(tag) = captures.get(1) {
+            push_unique(&mut tags, tag.as_str().to_owned());
         }
     }
     tags
@@ -259,7 +268,7 @@ mod tests {
             parse_markdown("---\ntags: [alpha, work/x]\n---\n#alpha and #beta and #work/x");
         assert_eq!(
             parsed.tags,
-            vec!["alpha".to_owned(), "beta".to_owned(), "work/x".to_owned()]
+            vec!["alpha".to_owned(), "work/x".to_owned(), "beta".to_owned()]
         );
     }
 
@@ -271,11 +280,7 @@ mod tests {
         assert_eq!(parsed.source_id.as_deref(), Some("abc123"));
         assert_eq!(
             parsed.outgoing_links,
-            vec![
-                "Meetings".to_owned(),
-                "Target".to_owned(),
-                "Other".to_owned()
-            ]
+            vec!["Target".to_owned(), "Other".to_owned()]
         );
     }
 
@@ -296,6 +301,26 @@ mod tests {
         assert_eq!(
             parsed.frontmatter.get("w"),
             Some(&FrontmatterValue::String("1.0".to_owned()))
+        );
+    }
+
+    #[test]
+    fn quoted_scalars_and_list_elements_roundtrip_json_escaping() {
+        let value = "quotes \" comma, newline\n backslash\\";
+        let encoded = serde_json::to_string(value).unwrap();
+        let parsed = parse_markdown(&format!(
+            "---\nvalue: {encoded}\nlist: [{encoded}, \"next\"]\n---\nbody"
+        ));
+        assert_eq!(
+            parsed.frontmatter.get("value"),
+            Some(&FrontmatterValue::String(value.to_owned()))
+        );
+        assert_eq!(
+            parsed.frontmatter.get("list"),
+            Some(&FrontmatterValue::List(vec![
+                value.to_owned(),
+                "next".to_owned()
+            ]))
         );
     }
 

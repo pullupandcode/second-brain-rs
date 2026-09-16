@@ -5,8 +5,9 @@ use std::{sync::Arc, time::Instant};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, Content, ListToolsResult, PaginatedRequestParams,
-        ServerCapabilities, ServerInfo, Tool,
+        CallToolRequestParams, CallToolResult, Content, GetPromptRequestParams, GetPromptResult,
+        ListPromptsResult, ListToolsResult, PaginatedRequestParams, Prompt, PromptMessage,
+        PromptMessageRole, ServerCapabilities, ServerInfo, Tool,
     },
     service::RequestContext,
 };
@@ -14,7 +15,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    auth::AuthContext,
+    auth::{AuthContext, scopes::Scope},
     config::ServerConfig,
     observability::{OperationalLogEntry, ToolCallResult, log_operational},
     runtime::{DispatchError, Runtime},
@@ -101,26 +102,88 @@ fn tool_to_rmcp(name: &'static str, description: &'static str, schema: Value) ->
 
 impl ServerHandler for SecondBrainHandler {
     fn get_info(&self) -> ServerInfo {
-        // `ServerInfo::new` populates `server_info` from the crate env
-        // (name = "second-brain-rs", version from Cargo.toml).
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_prompts()
+                .build(),
+        )
+        .with_server_info(rmcp::model::Implementation::new(
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_PKG_VERSION"),
+        ))
     }
 
-    async fn list_tools(
+    fn initialize(
+        &self,
+        request: rmcp::model::InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ServerInfo, ErrorData>> + Send {
+        let info = self
+            .get_info()
+            .with_protocol_version(request.protocol_version.clone());
+        if context.peer.peer_info().is_none() {
+            context.peer.set_peer_info(request);
+        }
+        std::future::ready(Ok(info))
+    }
+
+    fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, ErrorData> {
-        let tools = context
-            .extensions
-            .get::<AuthContext>()
-            .map_or_else(Vec::new, |auth| {
-                self.visible_tools(auth)
-                    .into_iter()
-                    .map(|(name, description, schema)| tool_to_rmcp(name, description, schema))
-                    .collect()
-            });
-        Ok(ListToolsResult::with_all_items(tools))
+    ) -> impl Future<Output = Result<ListToolsResult, ErrorData>> + Send {
+        let tools = request_auth(&context).map_or_else(Vec::new, |auth| {
+            self.visible_tools(auth)
+                .into_iter()
+                .map(|(name, description, schema)| tool_to_rmcp(name, description, schema))
+                .collect()
+        });
+        std::future::ready(Ok(ListToolsResult::with_all_items(tools)))
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, ErrorData> {
+        if !request_auth(&context).is_some_and(|auth| auth.scopes.contains(&Scope::SkillsRead)) {
+            return Err(forbidden_scope());
+        }
+        let prompts = self
+            .inner
+            .runtime
+            .loaded_skills()
+            .await
+            .into_iter()
+            .map(|skill| Prompt::new(skill.name, Some(skill.description), None))
+            .collect();
+        Ok(ListPromptsResult::with_all_items(prompts))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResult, ErrorData> {
+        if !request_auth(&context).is_some_and(|auth| auth.scopes.contains(&Scope::SkillsRead)) {
+            return Err(forbidden_scope());
+        }
+        let skill = self
+            .inner
+            .runtime
+            .loaded_skills()
+            .await
+            .into_iter()
+            .find(|skill| skill.name == request.name)
+            .ok_or_else(|| {
+                ErrorData::new(rmcp::model::ErrorCode(-32601), "Method not found", None)
+            })?;
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            skill.content,
+        )])
+        .with_description(skill.description))
     }
 
     async fn call_tool(
@@ -130,7 +193,7 @@ impl ServerHandler for SecondBrainHandler {
     ) -> Result<CallToolResult, ErrorData> {
         let started = Instant::now();
         let name = request.name.to_string();
-        let auth = context.extensions.get::<AuthContext>();
+        let auth = request_auth(&context);
         let (subject, client_id) = auth.map_or_else(
             || ("anonymous".to_owned(), None),
             |auth| (auth.subject.clone(), auth.client_id.clone()),
@@ -140,27 +203,26 @@ impl ServerHandler for SecondBrainHandler {
 
         let (result, outcome) = match access {
             ToolAccess::Unknown => (
-                Err(ErrorData::invalid_params(
-                    format!("unknown tool: {name}"),
+                Err(ErrorData::new(
+                    rmcp::model::ErrorCode(-32601),
+                    "Method not found",
                     None,
                 )),
                 ToolCallResult::Error,
             ),
-            ToolAccess::Forbidden => (
-                Err(ErrorData::invalid_request("forbidden_scope", None)),
-                ToolCallResult::ForbiddenScope,
-            ),
+            ToolAccess::Forbidden => (Err(forbidden_scope()), ToolCallResult::ForbiddenScope),
             ToolAccess::Allowed => match self.inner.runtime.dispatch(&name, &args).await {
                 Ok(value) => (Ok(structured_result(&value)), ToolCallResult::Ok),
                 Err(DispatchError::NotImplemented) => (
-                    Ok(CallToolResult::success(vec![Content::text(
+                    Ok(CallToolResult::error(vec![Content::text(
                         "not_implemented",
                     )])),
-                    ToolCallResult::Ok,
+                    ToolCallResult::Error,
                 ),
-                Err(DispatchError::UnknownTool(tool)) => (
-                    Err(ErrorData::invalid_params(
-                        format!("unknown tool: {tool}"),
+                Err(DispatchError::UnknownTool(_tool)) => (
+                    Err(ErrorData::new(
+                        rmcp::model::ErrorCode(-32601),
+                        "Method not found",
                         None,
                     )),
                     ToolCallResult::Error,
@@ -169,8 +231,21 @@ impl ServerHandler for SecondBrainHandler {
                     Err(ErrorData::invalid_params(message, None)),
                     ToolCallResult::Error,
                 ),
+                Err(DispatchError::Coded { code, message }) => (
+                    Err(ErrorData::invalid_params(
+                        message,
+                        Some(json!({"code": code})),
+                    )),
+                    ToolCallResult::Error,
+                ),
                 Err(DispatchError::Internal(message)) => (
-                    Err(ErrorData::internal_error(message, None)),
+                    Err(ErrorData::internal_error(
+                        {
+                            tracing::error!(%message, "tool failed");
+                            "Internal tool error"
+                        },
+                        None,
+                    )),
                     ToolCallResult::Error,
                 ),
             },
@@ -187,6 +262,17 @@ impl ServerHandler for SecondBrainHandler {
         });
         result
     }
+}
+
+fn request_auth(context: &RequestContext<RoleServer>) -> Option<&AuthContext> {
+    context
+        .extensions
+        .get::<axum::http::request::Parts>()
+        .and_then(|parts| parts.extensions.get::<AuthContext>())
+}
+
+fn forbidden_scope() -> ErrorData {
+    ErrorData::new(rmcp::model::ErrorCode(-32003), "forbidden_scope", None)
 }
 
 fn structured_result(value: &Value) -> CallToolResult {

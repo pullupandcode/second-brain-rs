@@ -65,8 +65,18 @@ pub struct ServerConfig {
     pub ocr: OcrConfig,
     /// Logging settings.
     pub logging: LoggingConfig,
+    /// Vault skill maps.
+    pub skills: SkillsConfig,
     /// Security policy settings.
     pub security: SecurityConfig,
+}
+
+/// Vault-backed prompt configuration.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct SkillsConfig {
+    /// Normalized vault-relative skill maps.
+    pub map_paths: Vec<String>,
 }
 
 /// Security policy configuration.
@@ -218,6 +228,14 @@ struct RawConfig {
     logging: RawLogging,
     #[serde(default)]
     security: RawSecurity,
+    #[serde(default)]
+    skills: RawSkills,
+}
+
+#[derive(Deserialize, Default)]
+struct RawSkills {
+    #[serde(default)]
+    map_paths: Vec<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -371,6 +389,9 @@ impl RawConfig {
             },
             logging: LoggingConfig {
                 log_args: self.logging.log_args,
+            },
+            skills: SkillsConfig {
+                map_paths: normalize_path_list(&self.skills.map_paths, "skills.map_paths")?,
             },
             security: SecurityConfig {
                 blocked_paths: security_blocked_paths,

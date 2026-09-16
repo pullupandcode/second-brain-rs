@@ -7,6 +7,46 @@
 //! 4. any pattern containing `*` — `*` matches any run of characters.
 //! 5. otherwise — exact match.
 
+use std::sync::{Arc, RwLock};
+
+/// Shared effective denylist. Replacements are immediately visible to every clone.
+#[derive(Clone, Debug, Default)]
+pub struct PathPolicy(Arc<RwLock<Vec<String>>>);
+
+impl PathPolicy {
+    /// Construct a policy from normalized vault patterns.
+    #[must_use]
+    pub fn new(patterns: Vec<String>) -> Self {
+        Self(Arc::new(RwLock::new(patterns)))
+    }
+    /// Test a vault-relative path against the current denylist.
+    #[must_use]
+    pub fn is_blocked(&self, path: &str) -> bool {
+        path_matches_any_pattern(
+            &self
+                .0
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            path,
+        )
+    }
+    /// Atomically replace the effective denylist. No guard escapes this method.
+    pub fn replace(&self, patterns: Vec<String>) {
+        *self
+            .0
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = patterns;
+    }
+    /// Return a snapshot for diagnostics and policy composition.
+    #[must_use]
+    pub fn snapshot(&self) -> Vec<String> {
+        self.0
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
 /// Whether `vault_path` matches any of `patterns`.
 #[must_use]
 pub fn path_matches_any_pattern(patterns: &[String], vault_path: &str) -> bool {
