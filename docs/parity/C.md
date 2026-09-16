@@ -21,6 +21,7 @@ The pinned schema defines neither field nor rule. Those extra story requirements
 are outside the adopted executable-reference scope and must not be represented as
 implemented. The reference uses a YAML subset (including inline arrays and field
 declarations); this port uses the same subset without a general YAML dependency.
+Leading indentation is bounded to 256 spaces to keep parser recursion bounded.
 
 ## Reference limitations and security improvements
 
@@ -32,6 +33,11 @@ Frontmatter defaults and required/type declarations are parsed and exposed.
 Matching the reference, record creation synthesizes `scheduled` and normalizes
 meeting attendees; it does not enforce declarations or apply `defaultValue`.
 Missing record templates are tolerated. Daily templates remain required.
+
+Serialization difference: written YAML mapping keys use deterministic alphabetical
+order rather than JavaScript insertion order. Parsed fields, note body content,
+and ordered list values retain equivalent semantics; byte-for-byte mapping key
+order is not claimed.
 
 Framework schemas, registries, templates, and note workflows enforce the shared
 effective privacy policy, including after skill reload and through canonical
@@ -55,6 +61,8 @@ symlink components, use exclusive temporary files, and publish complete content.
 | HTTP integration | Pre-A transport rejected tool request with 422 | Actual HTTP overlay/capture/daily/scope round-trip passes after A integration |
 | Daily error codes | Generic errors lacked stable discriminators | `section_missing`, `section_not_writable`, and `markers_missing` preserved |
 | Registry numbers | JSON `1.0` rejected as noninteger | Integral floats and large integer-valued numbers match reference acceptance and ordering |
+| YAML inline comments | Comment after an earlier literal hash remained in the value | Whitespace-prefixed comment is removed like the reference subset |
+| Metadata case aliases | `private/SCHEMA.yaml` overwrote an existing file under blocked `Private/**` | Canonical target/ancestor identity is checked; existing and new destinations under that folder are blocked |
 | Existing structure test | Fixture had no schema and composition failed | Initialize schema, retain original privacy assertions, assert five record types |
 
 Additional regressions cover source-ID replacement and immediate indexing,
@@ -75,11 +83,24 @@ actual shared runtime policy and `skills_reload` handler.
   without suppressing inherited lints.
 - Actual HTTP framework acceptance: passed in the coordinator's permitted local
   socket environment; the previous HTTP failure is resolved.
-- Full all-feature suite, supply-chain checks, and explicit semver comparison:
-  coordinator validation in progress; results will be recorded before review.
+- `cargo +stable test --all-features`: passed all 121 tests: 62 library,
+  19 framework workflows (including actual HTTP), 25 protocol/read integration,
+  13 storage, and two storage HTTP tests. No tests ignored or filtered.
+- `cargo deny check` and `cargo audit`: passed with refreshed advisory data.
+- Forced-patch semver comparison against storage baseline `62f3df4`: passed
+  223 checks (31 inapplicable checks skipped), no API break detected. The forced
+  patch classification ensures pre-1.0 minor versioning does not bypass checks.
 
-The candidate integrates approved protocol behavior and the storage candidate
-`62f3df4`. Rebase onto the actual A/B squash commits is still required once those
-merges are permitted. Independent code review and QA must approve the final SHA;
+Validation logs are held by the coordinator as `c-revised-{fmt,clippy,tests}.log`
+and `c-final-{deny,audit,semver}.log`. The canonical metadata regression ran on the
+case-insensitive development filesystem; it detects and returns early on systems
+where those alternative spellings refer to distinct files.
+
+The tested source candidate `9f21526` integrates approved protocol behavior and
+storage candidate `b64bc10`. A separate shared-policy review remains open for
+newly created, differently cased blocked subtrees without an existing canonical
+ancestor. Any resulting baseline fix must be inherited and rechecked before
+final approval. Rebase onto the actual A/B squash commits is still required once
+those merges are permitted. Independent code review and QA must approve the final SHA;
 new commits invalidate earlier approvals. No 0.4.0 tag or release is published by
 this branch, and no unmerged story is marked completed.
