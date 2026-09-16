@@ -158,12 +158,14 @@ fn parse_mapping(
             parse_mapping(lines, cursor, Some(indent)).into()
         } else {
             let raw = raw
-                .find('#')
-                .filter(|i| {
-                    raw.get(..*i)
-                        .is_some_and(|s| s.ends_with(char::is_whitespace))
+                .char_indices()
+                .find(|(i, character)| {
+                    *character == '#'
+                        && raw
+                            .get(..*i)
+                            .is_some_and(|s| s.ends_with(char::is_whitespace))
                 })
-                .map_or(raw, |i| raw.get(..i).unwrap_or(raw));
+                .map_or(raw, |(i, _)| raw.get(..i).unwrap_or(raw));
             parse_scalar(raw.trim())
         };
         result.insert(key.into(), value);
@@ -355,6 +357,15 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn inline_comment_after_literal_hash_matches_reference_subset() {
+        let schema = parse_schema(
+            "version: 1\nschema_kind: base\ndescription: literal#hash # comment\ntypes: {}\n",
+        )
+        .unwrap();
+        assert_eq!(schema["description"], "literal#hash");
+    }
 
     #[test]
     fn schema_fields_defaults_and_declarations() {

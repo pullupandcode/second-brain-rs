@@ -164,11 +164,13 @@ impl Framework {
     async fn register(&self, args: &Map<String, Value>) -> Result<Value, DispatchError> {
         let name = string(args, "name")?;
         let path = self.check_path(string(args, "path")?)?;
+        let (canonical, _) = crate::vault::path::canonical_vault_path_for_write(&self.root, &path)
+            .await
+            .map_err(|error| invalid(error.to_string()))?;
+        self.check_path(&canonical)?;
         let priority = match args.get("priority") {
-            None => 100,
-            Some(value) => value
-                .as_i64()
-                .ok_or_else(|| invalid("priority must be an integer"))?,
+            None => json!(100),
+            Some(value) => read_priority(value, "priority")?,
         };
         let _guard = self.registry_lock.lock().await;
         let mut entries = self.registrations().await?;
@@ -222,10 +224,10 @@ impl Framework {
                 .ok_or_else(|| invalid("overlay registration must be an object"))?;
             let name = string(entry, "name")?;
             let path = self.check_path(string(entry, "path")?)?;
-            let priority = entry
-                .get("priority")
-                .and_then(Value::as_i64)
-                .ok_or_else(|| invalid("overlay.priority must be an integer"))?;
+            let priority = read_priority(
+                entry.get("priority").unwrap_or(&Value::Null),
+                "overlay.priority",
+            )?;
             entries.push(Map::from_iter([
                 ("name".into(), json!(name)),
                 ("path".into(), json!(path)),
@@ -346,14 +348,25 @@ impl Framework {
 fn sort_registrations(entries: &mut [Map<String, Value>]) {
     entries.sort_by(|a, b| {
         a.get("priority")
-            .and_then(Value::as_i64)
-            .cmp(&b.get("priority").and_then(Value::as_i64))
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0)
+            .total_cmp(&b.get("priority").and_then(Value::as_f64).unwrap_or(0.0))
             .then_with(|| {
                 a.get("name")
                     .and_then(Value::as_str)
                     .cmp(&b.get("name").and_then(Value::as_str))
             })
     });
+}
+fn read_priority(value: &Value, name: &str) -> Result<Value, DispatchError> {
+    if value
+        .as_f64()
+        .is_some_and(|number| number.is_finite() && number.fract() == 0.0)
+    {
+        Ok(value.clone())
+    } else {
+        Err(invalid(format!("{name} must be an integer")))
+    }
 }
 fn invalid(message: impl Into<String>) -> DispatchError {
     DispatchError::Invalid(message.into())

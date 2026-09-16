@@ -6,7 +6,7 @@ use uuid::Uuid;
 use super::{Framework, invalid};
 use crate::{
     runtime::DispatchError,
-    vault::path::{is_markdown_path, resolve_vault_path_for_write},
+    vault::path::{canonical_vault_path_for_write, is_markdown_path},
 };
 
 impl Framework {
@@ -26,9 +26,10 @@ impl Framework {
         if normalized.is_empty() {
             return Err(invalid("Metadata path must identify a file"));
         }
-        let target = resolve_vault_path_for_write(&self.root, &normalized)
+        let (canonical, target) = canonical_vault_path_for_write(&self.root, &normalized)
             .await
             .map_err(|e| invalid(e.to_string()))?;
+        self.check_path(&canonical)?;
         // Do not follow symlinks through metadata writes. This also closes aliases to blocked paths.
         let mut component = self.root.clone();
         for segment in normalized.split('/') {
@@ -75,10 +76,15 @@ impl Framework {
             drop(file);
             self.check_path(&normalized)?;
             // Revalidate ancestry after preparing the complete file, before publishing it.
-            resolve_vault_path_for_write(&self.root, &normalized)
-                .await
-                .map_err(|e| invalid(e.to_string()))?;
+            let (current_canonical, current_target) =
+                canonical_vault_path_for_write(&self.root, &normalized)
+                    .await
+                    .map_err(|e| invalid(e.to_string()))?;
             self.check_path(&normalized)?;
+            self.check_path(&current_canonical)?;
+            if canonical != current_canonical || target != current_target {
+                return Err(invalid("Metadata path changed during publication"));
+            }
             if overwrite {
                 tokio::fs::rename(&temporary, &target)
                     .await

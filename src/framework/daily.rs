@@ -52,16 +52,22 @@ impl Framework {
                 let (_, marker, writable) = SECTIONS
                     .iter()
                     .find(|(name, _, _)| *name == section)
-                    .ok_or_else(|| {
-                    invalid(format!("Daily note section is not configured: {section}"))
+                    .ok_or_else(|| DispatchError::Coded {
+                    code: "section_missing",
+                    message: format!("Daily note section is not configured: {section}"),
                 })?;
                 if !writable {
-                    return Err(invalid(format!(
-                        "Daily note section is not writable: {section}"
-                    )));
+                    return Err(DispatchError::Coded {
+                        code: "section_not_writable",
+                        message: format!("Daily note section is not writable: {section}"),
+                    });
                 }
-                let (start, end) = marker_range(&note.content, marker)
-                    .ok_or_else(|| invalid(format!("Markers missing for section: {marker}")))?;
+                let (start, end) = marker_range(&note.content, marker).ok_or_else(|| {
+                    crate::vault::writer::VaultWriteError::new(
+                        "markers_missing",
+                        format!("Markers missing for section: {marker}"),
+                    )
+                })?;
                 let existing = note.content.get(start..end).unwrap_or("").trim();
                 let content = if existing.is_empty() {
                     content.to_owned()

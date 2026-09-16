@@ -842,3 +842,94 @@ async fn skills_reload_blocks_unlisted_template_alias_to_private_target() {
     assert!(error.to_string().contains("blocked"));
     assert!(!dir.path().join("vault/Notes/After.md").exists());
 }
+
+#[tokio::test]
+async fn daily_errors_keep_reference_machine_readable_codes() {
+    use second_brain_rs::runtime::DispatchError;
+    let (dir, runtime) = fixture().await;
+    let daily = call(&runtime, "daily_note_get", json!({"date":"2026-05-07"})).await;
+    for (section, expected) in [
+        ("unknown", "section_missing"),
+        ("agenda", "section_not_writable"),
+    ] {
+        let error=runtime.dispatch("daily_note_append",json!({"date":"2026-05-07","section":section,"content":"x","base_sha256":daily["currentSha256"]}).as_object().unwrap()).await.unwrap_err();
+        assert!(matches!(error,DispatchError::Coded{code,..} if code == expected));
+    }
+    tokio::fs::write(
+        dir.path().join("vault/Calendar/Days/2026-05-07.md"),
+        "# Day without markers",
+    )
+    .await
+    .unwrap();
+    let error = runtime
+        .dispatch(
+            "daily_note_append",
+            json!({"date":"2026-05-07","content":"x","base_sha256":daily["currentSha256"]})
+                .as_object()
+                .unwrap(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error,DispatchError::Write(error) if error.code()=="markers_missing"));
+}
+
+#[tokio::test]
+async fn registry_priorities_accept_json_integral_floats_like_reference_numbers() {
+    let (_dir, runtime) = fixture().await;
+    for (name, priority) in [
+        ("normal", json!(1.0)),
+        ("large", json!(1e20)),
+        ("negative", json!(-10)),
+    ] {
+        call(
+            &runtime,
+            "framework_register",
+            json!({"name":name,"path":"overlay.yaml","priority":priority}),
+        )
+        .await;
+    }
+    let entries = call(&runtime, "framework_list", json!({})).await;
+    assert_eq!(entries[0]["name"], "negative");
+    assert_eq!(entries[1]["name"], "normal");
+    assert_eq!(entries[2]["name"], "large");
+}
+
+#[tokio::test]
+async fn metadata_guards_existing_and_new_paths_on_case_insensitive_filesystems() {
+    let (dir, runtime) = fixture().await;
+    tokio::fs::create_dir_all(dir.path().join("vault/Private"))
+        .await
+        .unwrap();
+    tokio::fs::write(
+        dir.path().join("vault/Private/schema.yaml"),
+        "sensitive metadata",
+    )
+    .await
+    .unwrap();
+    if !tokio::fs::try_exists(dir.path().join("vault/private/SCHEMA.yaml"))
+        .await
+        .unwrap()
+    {
+        // Case-sensitive filesystems have no equivalent alias to exercise.
+        return;
+    }
+    for output in ["private/SCHEMA.yaml", "private/new.yaml"] {
+        let error = runtime
+            .dispatch(
+                "framework_init",
+                json!({"framework":"lyt","output_path":output,"mode":"overwrite"})
+                    .as_object()
+                    .unwrap(),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("blocked"), "{error}");
+    }
+    assert_eq!(
+        tokio::fs::read_to_string(dir.path().join("vault/Private/schema.yaml"))
+            .await
+            .unwrap(),
+        "sensitive metadata"
+    );
+    assert!(!dir.path().join("vault/Private/new.yaml").exists());
+}

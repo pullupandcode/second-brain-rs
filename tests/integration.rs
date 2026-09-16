@@ -270,10 +270,16 @@ async fn conflicts_are_reported_and_excluded_from_search() {
 #[tokio::test]
 async fn list_folder_and_vault_structure_skip_blocked() {
     let (_dir, runtime) = runtime().await;
+    // The reference structure tool composes the schema as well as listing folders.
+    runtime
+        .dispatch("framework_init", &args(json!({"framework":"lyt"})))
+        .await
+        .unwrap();
     let value = runtime
         .dispatch("get_vault_structure", &Map::new())
         .await
         .unwrap();
+    assert_eq!(value["recordTypes"].as_array().unwrap().len(), 5);
     let folders: Vec<&str> = value["folders"]
         .as_array()
         .unwrap()
