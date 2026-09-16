@@ -1,10 +1,9 @@
 # second-brain-rs
 
 Rust port of `second-brain-mcp` v1.1.1, delivered in reviewed increments.
-**v0.2.0 is the read/protocol/skills/OCR-contract release, not full production parity.**
-Production JWT mode fails closed until the verifier release. Write, delete,
-framework, capture and daily-note handlers are advertised but return tool errors
-until their planned releases. See [the parity plan](docs/PARITY_PLAN.md).
+**v0.3.0 adds audited note writes, deletion and recovery to the read/protocol/skills release.**
+Production JWT mode fails closed until the verifier release. Framework, capture
+and daily-note handlers are advertised but return tool errors until v0.4.0. See [the parity plan](docs/PARITY_PLAN.md).
 
 Build with current stable Rust (minimum 1.95):
 
@@ -23,17 +22,23 @@ to 1,000,000 bytes; optional `mcp-method` and `mcp-name` headers must match the 
 Implemented tools: `read_note`, `list_folder`, `search`, `get_backlinks`,
 `get_outgoing_links`, `list_vault_conflicts`, `link_to_page`, `get_vault_structure`
 (folder data; record types arrive in v0.4), `skills_list`, `skills_reload`, and
-three optional OCR tools. Empty folder paths select the root; empty queries list
-indexed notes. The index is rebuilt at startup; external file edits require a
-restart to refresh search.
+three optional OCR tools. Note mutations include `create_note`, `replace_note`,
+`update_frontmatter`, `insert_under_heading`, `append_to_section`, and
+`delete_note`, and `hard_delete_note`; admin tools expose write-failure and recovery diagnostics.
+Empty folder paths select the root; empty queries list
+indexed notes. The index is rebuilt at startup and after server mutations; external file edits
+require a restart to refresh search. Writes use `base_sha256` for optimistic
+concurrency, enforce a per-path cooldown, and record audit/provenance entries.
+Soft deletion moves notes into the configured trash; hard deletion requires its
+separate `vault:delete:hard` scope.
 
 | Scope | Purpose |
 |---|---|
 | `vault:read` | Notes, search, folders, links and structure |
 | `skills:read` | `prompts/list` and `prompts/get` |
-| `vault:write` | Note and record mutations (planned v0.3/v0.4) |
-| `vault:delete` | Soft deletion (planned v0.3) |
-| `vault:delete:hard` | Permanent deletion (planned v0.3) |
+| `vault:write` | Note mutations; record workflows arrive in v0.4 |
+| `vault:delete` | Soft deletion |
+| `vault:delete:hard` | Permanent deletion |
 | `vault:capture` | Capture workflows (planned v0.4) |
 | `daily:append` | Daily-note append (planned v0.4) |
 | `admin` | Diagnostics, skill reload, framework management, OCR |
@@ -58,5 +63,6 @@ timestamps and remain queued. As in the reference, this is an in-memory job
 contract, not an OCR worker; jobs disappear on restart.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for validation and
-[docs/parity/A.md](docs/parity/A.md) for reference mappings and intentional
+[docs/parity/A.md](docs/parity/A.md) and [docs/parity/B.md](docs/parity/B.md)
+for reference mappings and intentional
 security/compatibility improvements.
