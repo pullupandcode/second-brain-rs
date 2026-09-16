@@ -152,15 +152,23 @@ fn parse_scalar(raw: &str) -> FrontmatterValue {
         "false" => return FrontmatterValue::Bool(false),
         _ => {}
     }
-    if let Some(number) = parse_number(raw) {
+    if let Some(number) = parse_canonical_number(raw) {
         return FrontmatterValue::Number(number);
     }
     FrontmatterValue::String(decode_string(raw))
 }
 
-fn parse_number(raw: &str) -> Option<f64> {
+/// Parse only the canonical finite number spelling accepted by the reference.
+///
+/// Mirrors `Number.isFinite(Number(raw)) && String(Number(raw)) === raw`;
+/// callers trim their scalar first. Shared with framework scalar parsing.
+pub(crate) fn parse_canonical_number(raw: &str) -> Option<f64> {
     let value: f64 = raw.parse().ok()?;
-    (value.is_finite() && value.to_string() == raw).then_some(value)
+    if !value.is_finite() {
+        return None;
+    }
+    let mut buffer = ryu_js::Buffer::new();
+    (buffer.format(value) == raw).then_some(value)
 }
 
 fn decode_string(value: &str) -> String {
@@ -322,6 +330,57 @@ mod tests {
                 "next".to_owned()
             ]))
         );
+    }
+
+    #[test]
+    fn numeric_scalars_match_ecmascript_canonical_formatting() {
+        // Expected types verified against the pinned reference's
+        // Number.isFinite(Number(raw)) && String(Number(raw)) === raw.
+        let cases = [
+            ("1e-7", true),
+            ("0.0000001", false),
+            ("1e+21", true),
+            ("1000000000000000000000", false),
+            ("-0", false),
+            ("0", true),
+            ("0.1", true),
+            ("1e-6", false),
+            ("0.000001", true),
+            ("9.999999999999997e-7", true),
+            ("0.0000010000000000000002", true),
+            ("999999999999999900000", true),
+            ("1.0000000000000001e+21", true),
+            ("1e+20", false),
+            ("100000000000000000000", true),
+            ("-1e-7", true),
+            ("-1e+21", true),
+            ("1E-7", false),
+            ("1e21", false),
+            ("+1", false),
+            ("01", false),
+            ("1.0", false),
+            ("NaN", false),
+            ("Infinity", false),
+            ("-Infinity", false),
+            ("5e-324", true),
+            ("4e-324", false),
+            ("1.7976931348623157e+308", true),
+            ("1e309", false),
+            ("-0.0000001", false),
+        ];
+        for (raw, numeric) in cases {
+            let parsed = parse_markdown(&format!("---\nvalue: {raw}\n---\nbody"));
+            let expected = if numeric {
+                FrontmatterValue::Number(raw.parse().unwrap())
+            } else {
+                FrontmatterValue::String(raw.to_owned())
+            };
+            assert_eq!(
+                parsed.frontmatter.get("value"),
+                Some(&expected),
+                "scalar {raw}"
+            );
+        }
     }
 
     proptest::proptest! {

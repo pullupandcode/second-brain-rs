@@ -17,6 +17,9 @@
   canonical-Unicode-alias bypasses.
   Soft ignored globs and ordinary path identity remain case-sensitive.
 - Add in-memory OCR notebook/renumber queue and status contract.
+- Match ECMAScript canonical numeric scalar formatting, including exponent
+  thresholds, signed zero and finite-number checks; share the parser with
+  framework schema parsing.
 - Fix empty root/search inputs, canonical folder listings, directory errors,
   frontmatter tag order/body-only links, and escaped string/list roundtrips.
 - Fail closed for JWT mode until the production verifier release; pending tools

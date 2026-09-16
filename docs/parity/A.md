@@ -130,3 +130,22 @@ aliases, snapshot preservation, and future-write-path policy. Raw receipts are
 matching `a-nfc-policy-green.log` and `a-nfc-integration-green.log` contain passing
 runs. The new dependency is unicode-normalization0.1.25, verified/fetched by the
 coordinator; the final dependency audit must be rerun for this candidate.
+
+
+## ECMAScript numeric scalar parity (review regression)
+
+The pinned Markdown parser accepts numbers only when
+`Number.isFinite(Number(raw)) && String(Number(raw)) === raw`. Rust's default
+float display differs around decimal/exponent thresholds and negative zero.
+`vault::markdown::parse_canonical_number` is now a crate-visible shared helper
+using ryu-js1.0.3 for ECMAScript canonical display after an explicit finite guard;
+framework schema parsing can reuse the same helper. Raw scalars that fail the
+canonical spelling check remain strings, rather than being coerced to numbers.
+
+The 30-case table was independently checked with JavaScript and includes 1e-7,
+1e+21, decimal/exponent threshold neighbors, -0, signed/capitalized exponents,
+minimum subnormal, maximum finite double, overflow and nonfinite values. RED on
+predecessor83b83b5: 1e-7 was incorrectly a string; receipt
+`/private/tmp/parity-admin/a-numeric-red.log`. GREEN after implementation is
+`a-numeric-green.log` in the same directory. The coordinator verified/fetched
+ryu-js1.0.3; dependency checks must run on the updated lockfile.
