@@ -5,7 +5,7 @@
 Match the observable behavior of local `second-brain-mcp` v1.1.1, commit
 `48b272337a6ef7e381fd175b2ff1844c02cebd7a`. The TypeScript implementation and its
 tests are the executable reference; README claims alone are not acceptance evidence.
-Target all 31 base tools, three optional OCR job-contract tools, seven scopes,
+Target all 31 base tools, three optional OCR job-contract tools, eight scopes,
 MCP prompts, HTTP transport, configuration, filesystem policies, and deployment.
 OCR parity means the reference job contract, not a new OCR engine.
 
@@ -22,7 +22,7 @@ integration tests pass outside the network sandbox. Empty-query search fails.
 | A / protocol agent | 0.2.0 | Complete read/index/parser behavior; root folder and empty search inputs; exact tool schemas and scope registry including delete and skills tools; MCP initialize/list/call, per-request auth propagation, errors and structured results; skill maps/loading/reloading/prompts and effective privacy policy; optional OCR queue/status/renumber contract; read/transport/skills/OCR tests; baseline docs | Existing phase-2 work |
 | B / storage agent | 0.3.0 | Atomic create/replace/frontmatter/marker writes, optimistic concurrency, per-path serialization, cooldown, traversal/symlink/conflict protection, soft/hard deletion, audit lifecycle/rotation/recovery; runtime wiring and write/delete config; negative and failure-path tests | A integrated before merge |
 | C / framework agent | 0.4.0 | YAML schema validation, LYT/PARA/Zettel presets, overlays and registry persistence, initialize/reload/register/unregister/list/compose; record types/maps/structure, templates, records, idempotent source captures, daily get/append/repair and both capture strategies; route every mutation through audited writer | B writer APIs; A privacy policy |
-| D / auth agent | 0.5.0 | Actual RS256/ES256 JWT/JWKS verification, issuer/audience/time/algorithm/subject checks, caching and rollover, fail-closed auth, dev loopback restriction, HTTP challenges/discovery and seven scopes; comprehensive auth tests; final configuration/user/deployment docs and parity closure | A protocol; final rebase after C |
+| D / auth agent | 0.5.0 | Actual RS256/ES256 JWT/JWKS verification, issuer/audience/time/algorithm/subject checks, caching and rollover, fail-closed auth, dev loopback restriction, HTTP challenges/discovery and eight scopes; comprehensive auth tests; final configuration/user/deployment docs and parity closure | A protocol; final rebase after C |
 
 Each owner owns its new modules and tests. Shared files (`Cargo.toml`, lockfile,
 config, runtime, module exports, registry, MCP/HTTP) are edited in separate
@@ -93,8 +93,28 @@ GitHub references:
 All four PRs have both independent approvals, green required checks, squash
 merges, matching version metadata and verified immutable releases. Every target
 tool has a functioning handler; no successful `not_implemented` response remains.
-All seven scopes and prompt operations are exercised over HTTP. The combined
+All eight scopes and prompt operations are exercised over HTTP. The combined
 suite passes; no secrets or blocked data leak; production JWT mode rejects
 development tokens. Documentation states actual behavior and known reference
 limitations. The coordinator records PR URLs, merge SHAs, review SHAs, test
 results and release URLs in the delivery ledger.
+
+## Adopted repository stories
+
+The existing tracker is authoritative for task details, with behavior checked
+against the pinned reference. No duplicate story set will be created.
+
+| Owner | Stories |
+|---|---|
+| A | #19, #33, #43–#48; audit previously closed #12–#18 |
+| B | #20–#25, storage portion of #30, #40 |
+| C | #26–#29, framework portion of #30, #31–#32, #34–#36 |
+| D | #37–#39, #41–#42 |
+
+#30 is shared and closes only after both B and C acceptance passes. Existing
+phase labels are historical; release prep in #36 lands in 0.4.0, #42 in 0.5.0,
+and skill release prep #48 is pulled forward into A's 0.2.0. Correct #46's stale
+33-base-tool claim to 31 base / 34 with OCR. All eight scopes are required at
+completion. Issue #41 adds focused mutation testing for auth and validation.
+Report completion on issues only after the corresponding reviewed PR merges.
+GitHub immutability was confirmed enabled before work began.
