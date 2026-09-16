@@ -15,6 +15,12 @@ allow = [
     "CC0-1.0",
 ]
 
+# Mozilla trust-root data used by the production TLS verifier.
+# Its license text is retained in docs/licenses/webpki-root-certs.txt.
+[[licenses.exceptions]]
+name = "webpki-root-certs"
+allow = ["CDLA-Permissive-2.0"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

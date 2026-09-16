@@ -20,9 +20,10 @@ and trailing slash. `aud` must contain the configured audience. A nonempty
 string `sub` and numeric `exp` are required. Expired tokens are rejected at the
 expiration second; optional `nbf` is enforced with no clock-skew allowance.
 Synchronize the server and issuer clocks. Only the explicitly configured RS256
-and ES256 algorithms are accepted. Symmetric algorithms, token-provided key
-URLs, unknown critical headers, incompatible JWK metadata, and ambiguous key
-matches are rejected. `jti` and `client_id` are optional identity metadata.
+and ES256 algorithms are accepted. Symmetric algorithms, unknown critical
+headers, incompatible JWK metadata, and ambiguous key matches are rejected.
+Token-provided key URLs are ignored; only configured issuer endpoints are used.
+`jti` and `client_id` are optional identity metadata.
 
 The server resolves `.well-known/jwks.json` relative to each configured issuer,
 just as a URL relative reference. For an issuer ending in `/application/o/brain/`,

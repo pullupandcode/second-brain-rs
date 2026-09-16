@@ -65,6 +65,9 @@ member semantics. Development fallback behavior has matching regression coverage
   credential fields; private note content remains sensitive when opted in.
 - Required expiry differs deliberately from jose's optional-exp reference and
   fulfills adopted issue #38. Bounded network/cache behavior is security hardening.
+- The TLS verifier includes Mozilla trust-root data from `webpki-root-certs`.
+  Its CDLA-Permissive-2.0 license has a package-specific cargo-deny allowance;
+  the license text is retained in `docs/licenses/webpki-root-certs.txt`.
 - AWS-LC provides cryptography, avoiding the currently unpatched RustCrypto RSA
   advisory rather than accepting an advisory waiver.
 
