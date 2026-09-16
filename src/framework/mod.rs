@@ -278,11 +278,15 @@ impl Framework {
         let relative = resolved
             .strip_prefix(real_root)
             .map_err(|_| invalid("Vault path resolves outside the vault root"))?;
-        self.check_path(&relative.to_string_lossy().replace('\\', "/"))?;
-        tokio::fs::read_to_string(resolved)
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        self.check_path(&relative)?;
+        let content = tokio::fs::read_to_string(resolved)
             .await
-            .map(Some)
-            .map_err(|_| invalid("Vault read failed"))
+            .map_err(|_| invalid("Vault read failed"))?;
+        // Skill reload can replace policy during the filesystem await.
+        self.check_path(&normalized)?;
+        self.check_path(&relative)?;
+        Ok(Some(content))
     }
 
     // cancel-safe: reads only.

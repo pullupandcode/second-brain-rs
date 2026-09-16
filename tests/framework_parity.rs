@@ -653,3 +653,192 @@ async fn markdown_framework_output_uses_audited_note_guards() {
             .contains("framework: lyt")
     );
 }
+
+async fn fixture_with_skill_map() -> (tempfile::TempDir, Arc<Runtime>) {
+    let (dir, previous, config) = fixture_config(0).await;
+    drop(previous);
+    tokio::fs::write(dir.path().join("vault/Skill Map.md"), "# Skills\n")
+        .await
+        .unwrap();
+    let mut config = (*config).clone();
+    config.skills.map_paths = vec!["Skill Map.md".into()];
+    let runtime = Runtime::create(Arc::new(config)).await.unwrap();
+    (dir, runtime)
+}
+
+#[tokio::test]
+async fn skills_reload_updates_template_capture_and_daily_privacy() {
+    let (dir, runtime) = fixture_with_skill_map().await;
+    call(&runtime, "framework_init", json!({"framework":"lyt"})).await;
+    tokio::fs::write(dir.path().join("vault/_meta/framework.yaml"),"version: 1\nschema_kind: base\ntypes:\n  capture:\n    folder: Captures\n  note:\n    folder: Notes\n    template: x/Templates/Record.md\n").await.unwrap();
+    tokio::fs::write(
+        dir.path().join("vault/x/Templates/Record.md"),
+        "# Private template\n",
+    )
+    .await
+    .unwrap();
+    call(
+        &runtime,
+        "create_record",
+        json!({"type":"note","title":"Before"}),
+    )
+    .await;
+    call(&runtime,"inbox_capture",json!({"title":"Secret","content":"before","source_client":"test","source_id":"same","strategy":"replace_by_source_id"})).await;
+    let daily = call(&runtime, "daily_note_get", json!({"date":"2026-05-07"})).await;
+    tokio::fs::write(dir.path().join("vault/Skill Map.md"),"[[x/Templates/Record]]\n[[Captures/Secret]]\n[[Calendar/Days/2026-05-07]]\n[[x/Templates/Daily Template]]\n").await.unwrap();
+    call(&runtime, "skills_reload", json!({})).await;
+    for (tool, args) in [
+        ("create_record", json!({"type":"note","title":"After"})),
+        (
+            "inbox_capture",
+            json!({"title":"Secret","content":"after","source_client":"test","source_id":"same","strategy":"replace_by_source_id"}),
+        ),
+        (
+            "capture_for_date",
+            json!({"title":"Secret","content":"after","source_client":"test"}),
+        ),
+        ("daily_note_get", json!({"date":"2026-05-07"})),
+        ("daily_note_get", json!({"date":"2026-05-08"})),
+        (
+            "daily_note_append",
+            json!({"date":"2026-05-07","content":"after","base_sha256":daily["currentSha256"]}),
+        ),
+        (
+            "daily_note_repair_markers",
+            json!({"date":"2026-05-07","base_sha256":daily["currentSha256"]}),
+        ),
+    ] {
+        let error = runtime
+            .dispatch(tool, args.as_object().unwrap())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("blocked"), "{tool}: {error}");
+    }
+    assert!(!dir.path().join("vault/Notes/After.md").exists());
+    assert!(
+        !dir.path()
+            .join("vault/Calendar/Days/2026-05-08.md")
+            .exists()
+    );
+    assert!(
+        tokio::fs::read_to_string(dir.path().join("vault/Captures/Secret.md"))
+            .await
+            .unwrap()
+            .ends_with("before")
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn skills_reload_protects_canonical_schema_and_registry_aliases() {
+    let (dir, runtime) = fixture_with_skill_map().await;
+    call(&runtime, "framework_init", json!({"framework":"lyt"})).await;
+    call(
+        &runtime,
+        "framework_register",
+        json!({"name":"work","path":"_meta/work.yaml"}),
+    )
+    .await;
+    tokio::fs::create_dir_all(dir.path().join("vault/Aliases"))
+        .await
+        .unwrap();
+    tokio::fs::symlink(
+        "../_meta/framework.yaml",
+        dir.path().join("vault/Aliases/schema.md"),
+    )
+    .await
+    .unwrap();
+    tokio::fs::symlink(
+        "../_meta/schemas.json",
+        dir.path().join("vault/Aliases/registry.md"),
+    )
+    .await
+    .unwrap();
+    tokio::fs::write(
+        dir.path().join("vault/Skill Map.md"),
+        "[[Aliases/schema]]\n[[Aliases/registry]]\n",
+    )
+    .await
+    .unwrap();
+    call(&runtime, "skills_reload", json!({})).await;
+    for (tool, args) in [
+        ("framework_compose", json!({})),
+        ("list_record_types", json!({})),
+        ("find_maps", json!({})),
+        ("get_vault_structure", json!({})),
+        (
+            "framework_init",
+            json!({"framework":"para","mode":"overwrite"}),
+        ),
+        (
+            "framework_register",
+            json!({"name":"next","path":"_meta/next.yaml"}),
+        ),
+        ("framework_unregister", json!({"name":"work"})),
+        ("framework_list", json!({})),
+        ("framework_reload", json!({})),
+    ] {
+        let error = runtime
+            .dispatch(tool, args.as_object().unwrap())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("blocked"), "{tool}: {error}");
+    }
+    assert!(
+        tokio::fs::read_to_string(dir.path().join("vault/_meta/framework.yaml"))
+            .await
+            .unwrap()
+            .contains("framework: lyt")
+    );
+    assert!(
+        !tokio::fs::read_to_string(dir.path().join("vault/_meta/schemas.json"))
+            .await
+            .unwrap()
+            .contains("next")
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn skills_reload_blocks_unlisted_template_alias_to_private_target() {
+    let (dir, runtime) = fixture_with_skill_map().await;
+    call(&runtime, "framework_init", json!({"framework":"lyt"})).await;
+    tokio::fs::create_dir_all(dir.path().join("vault/Aliases"))
+        .await
+        .unwrap();
+    tokio::fs::write(
+        dir.path().join("vault/x/Templates/Record.md"),
+        "# Confidential template",
+    )
+    .await
+    .unwrap();
+    tokio::fs::symlink(
+        "../x/Templates/Record.md",
+        dir.path().join("vault/Aliases/template.md"),
+    )
+    .await
+    .unwrap();
+    tokio::fs::write(dir.path().join("vault/_meta/framework.yaml"),"version: 1\nschema_kind: base\ntypes:\n  note:\n    folder: Notes\n    template: Aliases/template.md\n").await.unwrap();
+    call(
+        &runtime,
+        "create_record",
+        json!({"type":"note","title":"Before"}),
+    )
+    .await;
+    tokio::fs::write(
+        dir.path().join("vault/Skill Map.md"),
+        "[[x/Templates/Record]]",
+    )
+    .await
+    .unwrap();
+    call(&runtime, "skills_reload", json!({})).await;
+    let error = runtime
+        .dispatch(
+            "create_record",
+            json!({"type":"note","title":"After"}).as_object().unwrap(),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("blocked"));
+    assert!(!dir.path().join("vault/Notes/After.md").exists());
+}

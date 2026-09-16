@@ -78,6 +78,7 @@ impl Framework {
             resolve_vault_path_for_write(&self.root, &normalized)
                 .await
                 .map_err(|e| invalid(e.to_string()))?;
+            self.check_path(&normalized)?;
             if overwrite {
                 tokio::fs::rename(&temporary, &target)
                     .await
