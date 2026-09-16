@@ -91,6 +91,26 @@ unviable cases did not compile; they are not counted as caught tests. This run
 covers provisional A+D head `7a691a50c95174cfbf33efd517e90a806d5243ac`,
 not the final combined A/B/C/D head.
 
+The fresh integrated auth/configuration/argument run at `e8743e2` tested **128
+mutants: 111 caught, 17 unviable, zero missed or timed out**, after its unmutated
+baseline passed. It covers the corrected signed claims, critical headers and
+ECMAScript scope parsing. Final transport-only integration must preserve the
+mutated source files and pass the complete unmutated suite; the final review
+records that comparison separately.
+
+## Public API compatibility
+
+The 0.4 → 0.5 migration changes `Authenticator::authenticate` from a synchronous
+`Result` to public `AuthFuture`, a boxed `Send` future borrowing the authenticator
+and authorization header. Implementers change their return type; callers await
+the result. This is an intentional pre-1.0 minor source break.
+
+The forced-patch semver diagnostic reports `trait_newly_sealed` (222 checks pass,
+one fails, 31 skip). An independent downstream crate successfully implemented
+the trait through public `AuthFuture` and used `Arc<dyn Authenticator>`, so the
+trait remains externally implementable. The diagnostic is recorded rather than
+misreported as a passing compatibility check.
+
 ## Verification status
 
 Draft [PR #52](https://github.com/pullupandcode/second-brain-rs/pull/52).
