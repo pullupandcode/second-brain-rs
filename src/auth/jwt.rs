@@ -2,6 +2,7 @@
 
 use std::{collections::HashSet, future::Future, pin::Pin, sync::Arc, time::Duration};
 
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{
     Algorithm, DecodingKey, Header, Validation, decode, decode_header,
     jwk::{Jwk, JwkSet, KeyAlgorithm, KeyOperations, PublicKeyUse},
@@ -209,9 +210,14 @@ impl JwtAuthenticator {
             return Err(invalid());
         }
         let header = decode_header(token).map_err(|_| invalid())?;
-        if !self.algorithms.contains(&header.alg)
-            || header.crit.as_ref().is_some_and(|crit| !crit.is_empty())
-        {
+        let protected = token
+            .split_once('.')
+            .map(|(encoded, _)| encoded)
+            .ok_or_else(invalid)?;
+        let raw_header: Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(protected).map_err(|_| invalid())?)
+                .map_err(|_| invalid())?;
+        if !self.algorithms.contains(&header.alg) || !valid_critical_header(&raw_header) {
             return Err(invalid());
         }
         for issuer in &self.issuers {
@@ -274,6 +280,20 @@ impl JwtAuthenticator {
 impl Authenticator for JwtAuthenticator {
     fn authenticate<'a>(&'a self, authorization: Option<&'a str>) -> AuthFuture<'a> {
         Box::pin(self.verify(authorization))
+    }
+}
+
+// The typed Header collapses explicit null into absence. Preserve raw JSON for
+// jose's critical-parameter rules, then verify the original signed bytes.
+fn valid_critical_header(header: &Value) -> bool {
+    match header.get("crit") {
+        None => true,
+        Some(Value::Array(names)) => {
+            !names.is_empty()
+                && names.iter().all(|name| name.as_str() == Some("b64"))
+                && header.get("b64").and_then(Value::as_bool) == Some(true)
+        }
+        _ => false,
     }
 }
 
@@ -413,6 +433,83 @@ mod tests {
             "Bearer {}",
             encode(&Header::new(algorithm), claims, &key).unwrap()
         )
+    }
+    fn signed_raw(header: &Value, payload: &Value) -> String {
+        let message = format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(header.to_string()),
+            URL_SAFE_NO_PAD.encode(payload.to_string())
+        );
+        let key =
+            EncodingKey::from_rsa_pem(include_bytes!("../../tests/fixtures/rsa-test-only.pem"))
+                .unwrap();
+        let signature =
+            jsonwebtoken::crypto::sign(message.as_bytes(), &key, Algorithm::RS256).unwrap();
+        format!("Bearer {message}.{signature}")
+    }
+    #[tokio::test]
+    async fn raw_critical_header_matrix_preserves_signature_verification() {
+        let auth = setup(None);
+        for (extension, accepted) in [
+            (json!({}), true),
+            (json!({"crit":[]}), false),
+            (json!({"crit":null}), false),
+            (json!({"crit":"b64"}), false),
+            (json!({"crit":12}), false),
+            (json!({"crit":[""]}), false),
+            (json!({"crit":[null]}), false),
+            (json!({"crit":["unknown"],"unknown":true}), false),
+            (json!({"crit":["b64"],"b64":true}), true),
+            (json!({"crit":["b64","b64"],"b64":true}), true),
+            (json!({"crit":["b64"]}), false),
+            (json!({"crit":["b64"],"b64":false}), false),
+            (json!({"crit":["b64"],"b64":null}), false),
+            (json!({"crit":["b64"],"b64":"true"}), false),
+            (json!({"b64":true}), true),
+            (json!({"b64":false}), true),
+            (json!({"b64":null}), true),
+            (json!({"b64":"true"}), true),
+        ] {
+            let mut header = json!({"alg":"RS256"});
+            header
+                .as_object_mut()
+                .unwrap()
+                .extend(extension.as_object().unwrap().clone());
+            let token = signed_raw(&header, &claims());
+            assert_eq!(
+                auth.authenticate(Some(&token)).await.is_ok(),
+                accepted,
+                "{header}"
+            );
+            if accepted {
+                let (message, signature) = token.rsplit_once('.').unwrap();
+                let replacement = if signature.starts_with('A') { 'B' } else { 'A' };
+                let corrupt = format!("{message}.{replacement}{}", &signature[1..]);
+                assert!(
+                    auth.authenticate(Some(&corrupt)).await.is_err(),
+                    "corrupt signature: {header}"
+                );
+            }
+        }
+    }
+    #[tokio::test]
+    async fn signed_scope_strings_use_ecmascript_separators_and_arrays_stay_exact() {
+        let auth = setup(None);
+        for (scope, count) in [
+            (json!("vault:read\u{85}admin"), 0),
+            (json!("vault:read\u{feff}admin"), 2),
+            (json!(["vault:read\u{feff}admin"]), 0),
+            (json!(["vault:read", "admin"]), 2),
+            (json!(["vault:read", null]), 0),
+        ] {
+            let mut payload = claims();
+            payload["scope"] = scope;
+            let result = auth
+                .authenticate(Some(&signed(&payload, Algorithm::RS256)))
+                .await
+                .unwrap();
+            assert_eq!(result.scopes.len(), count, "{}", payload["scope"]);
+        }
     }
     #[tokio::test]
     async fn registered_claim_shapes_match_jose() {

@@ -1889,6 +1889,7 @@ version = "0.5.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "hex",
  "icu_collator",
  "icu_locale_core",

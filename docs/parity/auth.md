@@ -44,6 +44,15 @@ from concurrent server tasks. The test now runs in an isolated subprocess with
 one global subscriber while preserving both logging modes, credential-redaction,
 identity and peer-IP assertions.
 
+Independent QA then reproduced malformed critical-header acceptance and Unicode
+scope-separator differences. Raw signed header tests failed for `crit: []`, and
+signed scope tests failed for U+0085 and U+FEFF. The verifier now validates raw
+critical-header JSON: nonempty recognized `b64` listings require Boolean true,
+including duplicate recognized entries; malformed or unknown critical names fail.
+Every accepted matrix case also tests a deliberately corrupted signature. String
+scope splitting uses the exact ECMAScript whitespace set; arrays retain exact
+member semantics. Development fallback behavior has matching regression coverage.
+
 ## Implementation and intentional differences
 
 - Object-safe async authentication; no blocking network calls in the request path.

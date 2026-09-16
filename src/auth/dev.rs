@@ -72,6 +72,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unicode_scope_separators_match_reference_fallback() {
+        let auth = DevAuthenticator::new(HashSet::from([Scope::SkillsRead]));
+        let fallback = auth
+            .authenticate(Some("Bearer scope=vault:read\u{85}admin"))
+            .await
+            .unwrap();
+        assert_eq!(fallback.scopes, HashSet::from([Scope::SkillsRead]));
+        let explicit = auth
+            .authenticate(Some("Bearer scope=vault:read\u{feff}admin"))
+            .await
+            .unwrap();
+        assert_eq!(
+            explicit.scopes,
+            HashSet::from([Scope::VaultRead, Scope::Admin])
+        );
+    }
+    #[tokio::test]
     async fn falls_back_to_defaults_when_no_scope_claim() {
         let auth = DevAuthenticator::new(HashSet::from([Scope::VaultRead]));
         let ctx = auth.authenticate(Some("Bearer scope=")).await.unwrap();

@@ -10,16 +10,16 @@ remains unchanged.
 
 | Scope / version | Current status | PR | Independent verification | Merge / release |
 |---|---|---|---|---|
-| A: protocol, reads, skills, OCR / 0.2.0 | Privacy corrections verified; CI green; formal GitHub review pending | [#51](https://github.com/pullupandcode/second-brain-rs/pull/51) | Code and QA approved `83b83b5` | Not merged; 0.2.0 not published |
-| B: writes, deletes, audit / 0.3.0 | Implemented; corrected candidate verified; CI green | [#49](https://github.com/pullupandcode/second-brain-rs/pull/49) | Code and QA approved `718c36b` | Not merged; 0.3.0 not published |
-| C: frameworks, records, daily / 0.4.0 | Implemented; `8ec2bd0` final checks and reviews in progress | [#50](https://github.com/pullupandcode/second-brain-rs/pull/50) | Final code/QA approvals pending | Not merged; 0.4.0 not published |
+| A: protocol, reads, skills, OCR / 0.2.0 | Shared numeric correction integrated; final checks and reviews pending | [#51](https://github.com/pullupandcode/second-brain-rs/pull/51) | Renewed code and QA review of `6fbdd122` pending | Not merged; 0.2.0 not published |
+| B: writes, deletes, audit / 0.3.0 | Shared numeric correction integrated; final checks and reviews pending | [#49](https://github.com/pullupandcode/second-brain-rs/pull/49) | Renewed code and QA review of `834ad9d` pending | Not merged; 0.3.0 not published |
+| C: frameworks, records, daily / 0.4.0 | Implemented; `f9e11d05` final checks and reviews in progress | [#50](https://github.com/pullupandcode/second-brain-rs/pull/50) | Final code/QA approvals pending | Not merged; 0.4.0 not published |
 | D: JWT, deployment, closure / 0.5.0 | JWT and HTTP auth implemented; focused mutations passed; combined integration prepared; final verification pending | [#52](https://github.com/pullupandcode/second-brain-rs/pull/52) | Final code/QA approvals pending | Not merged; 0.5.0 not published |
 
-Scope A's Unicode-normalized privacy candidate `83b83b5` and scope B's integrated
-storage candidate `718c36b` each have independent code and QA agent approvals,
-with green CI. Scope C `8ec2bd0` is undergoing final checks and reviews. Scope D
-has not yet received its final independent reviews. These are explicitly labeled
-agent reviews, not separate GitHub accounts.
+Previous A/B approvals were withdrawn after the shared numeric-parser correction
+changed their candidate heads. A `6fbdd122`, B `834ad9d` and C `f9e11d05` are now
+undergoing renewed exact-head checks and independent reviews. D is correcting
+QA findings and awaits final integration, mutation testing and independent
+reviews. These are explicitly labeled agent reviews, not separate GitHub accounts.
 GitHub ruleset `17368994` additionally requires a formal approval from
 another account before merging into main. The coordinator's squash-merge attempt
 was rejected by that rule; no protection has been bypassed. A formal reviewer

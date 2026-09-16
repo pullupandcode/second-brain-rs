@@ -386,6 +386,6 @@ async fn rejects_unknown_critical_header_extensions() {
     assert!(
         auth.authenticate(Some(&signed(&claims, header)))
             .await
-            .is_ok()
+            .is_err()
     );
 }

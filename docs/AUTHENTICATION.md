@@ -109,3 +109,8 @@ when present. Fractional expiry and not-before values are compared without
 rounding against the current whole epoch second, matching jose. ES256 keys must
 declare the P-256 curve. Audience may be the expected string or an array that
 contains it; scopes remain separately validated.
+
+Critical protected-header parameters follow jose: an explicit `crit` must be a
+nonempty array of recognized `b64` names, and critical `b64` must be Boolean true.
+Absent `crit` leaves noncritical `b64` ignored. Scope strings use ECMAScript
+whitespace (including U+FEFF, excluding U+0085); scope arrays keep exact elements.
