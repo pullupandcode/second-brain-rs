@@ -114,12 +114,13 @@ misreported as a passing compatibility check.
 ## Verification status
 
 [PR #52](https://github.com/pullupandcode/second-brain-rs/pull/52) contains the
-complete combined implementation. The corrected code candidate `1f9bc21` passes
+complete combined implementation. The candidate rebased through B/C onto A's actual squash commit `2b6dcf1` passes
 182 all-feature tests, nightly formatting, strict current-stable Clippy,
 cargo-deny and cargo-audit. Independent signed/header/scope/cache probes pass.
 The final transport integration leaves mutation-tested source and auth tests
 byte-identical to `e8743e2`; its full unmutated suite passes. Final exact-head
 code/QA decisions and CI are recorded on the PR, including any documentation-only
-follow-up. No merge or release is claimed: the repository requires formal
-external-account approval and actual preceding squash-commit integration.
+follow-up. A is merged and published as immutable v0.2.0. Scope D is not merged
+or released: it still requires repository review gates and actual B/C squash-commit
+integration. Its implementation is unchanged by the A squash rebase.
 See [the delivery ledger](../PARITY_STATUS.md) for current gates.
