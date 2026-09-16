@@ -4,6 +4,8 @@ use std::fmt::Write;
 
 use serde_json::{Map, Value, json};
 
+use crate::vault::markdown::parse_canonical_number;
+
 pub(super) fn parse_schema(source: &str) -> Result<Value, String> {
     if source
         .lines()
@@ -201,11 +203,14 @@ fn parse_scalar(raw: &str) -> Value {
                 .collect(),
         );
     }
-    if let Ok(number) = raw.parse::<f64>()
-        && number.is_finite()
-        && number.to_string() == raw
-    {
-        return serde_json::from_str(raw).unwrap_or_else(|_| json!(raw));
+    if let Some(number) = parse_canonical_number(raw) {
+        if let Ok(integer) = raw.parse::<i64>() {
+            return json!(integer);
+        }
+        if let Ok(integer) = raw.parse::<u64>() {
+            return json!(integer);
+        }
+        return json!(number);
     }
     json!(unquote(raw))
 }
@@ -365,6 +370,64 @@ mod tests {
         )
         .unwrap();
         assert_eq!(schema["description"], "literal#hash");
+    }
+
+    #[test]
+    fn numeric_defaults_follow_javascript_canonical_number_syntax() {
+        for (raw, expected) in [
+            ("1e-7", Some(1e-7)),
+            ("0.0000001", None),
+            ("0.000001", Some(1e-6)),
+            ("1e+21", Some(1e21)),
+            ("1000000000000000000000", None),
+            ("100000000000000000000", Some(1e20)),
+            ("1.7976931348623157e+308", Some(f64::MAX)),
+            ("5e-324", Some(f64::from_bits(1))),
+            ("2.2250738585072014e-308", Some(f64::MIN_POSITIVE)),
+            ("0", Some(0.0)),
+            ("-0", None),
+            ("0.0", None),
+            ("1e309", None),
+        ] {
+            let source = format!(
+                "version: 1\nschema_kind: base\ntypes:\n  note:\n    folder: Notes\n    frontmatter:\n      example: {raw}\n"
+            );
+            let schema = parse_schema(&source).unwrap();
+            let value = &schema["types"]["note"]["frontmatter"]["example"]["defaultValue"];
+            if let Some(expected) = expected {
+                assert_eq!(
+                    value.as_f64().map(f64::to_bits),
+                    Some(expected.to_bits()),
+                    "{raw}: {value}"
+                );
+            } else {
+                assert_eq!(value.as_str(), Some(raw), "{raw}: {value}");
+            }
+            assert_eq!(schema["version"].as_u64(), Some(1));
+        }
+    }
+
+    #[test]
+    fn finite_numeric_defaults_survive_json_response_roundtrip() {
+        for (raw, expected) in [
+            ("1.7976931348623157e+308", f64::MAX),
+            ("5e-324", f64::from_bits(1)),
+            ("2.2250738585072014e-308", f64::MIN_POSITIVE),
+        ] {
+            let source = format!(
+                "version: 1\nschema_kind: base\ntypes:\n  note:\n    folder: Notes\n    frontmatter:\n      example: {raw}\n"
+            );
+            let schema = parse_schema(&source).unwrap();
+            let response = serde_json::to_string(&schema).unwrap();
+            let decoded: Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(
+                decoded["types"]["note"]["frontmatter"]["example"]["defaultValue"]
+                    .as_f64()
+                    .map(f64::to_bits),
+                Some(expected.to_bits()),
+                "{raw}"
+            );
+        }
     }
 
     #[test]

@@ -90,6 +90,7 @@ symlink components, use exclusive temporary files, and publish complete content.
 | Locale ordering | Independent HTTP QA returned `[Alpha,Zulu,alpha,beta]` instead of `[alpha,Alpha,beta,Zulu]` | ICU ordering covers mixed case and accented registry/map/structure paths; numeric zero ties preserve name ordering |
 | ISO timestamp forms | Independent QA rejected overflow timestamps, year-month and timezone-less datetimes | Shared parser accepts/normalizes these forms; local DST gap/overlap and invalid leap seconds are covered |
 | Extended ISO years | `+010000-01-01T12:00:00Z` returned no parsed date | Large-date support, final TimeClip, extended serialization and local timezone displacement pass Node-derived regression cases |
+| Schema numeric defaults | `1e-7` incorrectly remained a string under Rust float formatting | Shared ECMAScript canonical-number parser matches exponent thresholds, maximum finite/minimum subnormal values and signed zero; direct finite JSON values preserve numeric types, and integer version `1` remains valid |
 | Existing structure test | Fixture had no schema and composition failed | Initialize schema, retain original privacy assertions, assert five record types |
 
 Additional regressions cover source-ID replacement and immediate indexing,
@@ -136,3 +137,12 @@ Rebase onto the actual A/B squash commits is still required once those merges ar
 permitted. Independent code review and QA must approve the final SHA; new commits
 invalidate earlier approvals. No 0.4.0 tag or release is published by this branch,
 and no unmerged story is marked completed.
+
+Numeric review follow-up: `cargo +stable test --offline --lib framework::schema::tests::`
+passes all seven schema tests. The boundary table covers `1e-7` / `0.0000001`,
+`0.000001`, `1e+21` / its expanded decimal spelling, `1e20`, maximum finite,
+minimum normal/subnormal, zero, signed zero and overflow. Maximum finite and
+smallest normal/subnormal defaults also survive serialization/deserialization of
+the schema response with exact float bits. No `float_roundtrip` feature or new
+dependency was needed. The shared writer numeric-serialization follow-up must be
+inherited before the final combined review.
