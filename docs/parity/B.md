@@ -123,3 +123,18 @@ Semver against A identifies `Runtime` losing the `UnwindSafe` auto trait. This i
 an intentional API change in pre-1.0 minor version 0.3.0; callers catching panics
 around runtime state must explicitly assess unwind safety. It is documented in
 the changelog, rather than describing all API changes as additive.
+
+
+## Numeric serialization follow-up
+
+After A adopted exact JavaScript number classification, the writer's Rust float
+formatting broke roundtrips at exponent thresholds. The new deterministic test
+failed before the fix: `1e-7` was written as `0.0000001` (RED). Finite numbers now
+use `ryu-js`'s JavaScript-compatible spelling; non-finite values remain rejected.
+GREEN: all 16 storage tests pass, including 1e-7/1e21 exponent thresholds,
+1e-6/1e20 decimal thresholds, negative zero normalization, smallest subnormal,
+minimum positive normal, finite extremes and the double adjacent to 1. A
+property test compares exact float bits after write/read for randomized finite
+values, normalizing negative zero as JavaScript does. Nightly formatting and
+all-target/all-feature Clippy with warnings denied pass. No dependency was added
+by this fix; ryu-js is already part of A.

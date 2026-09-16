@@ -5,6 +5,7 @@
 ## [0.3.0] - 2026-09-16
 
 - Implement atomic create/replace, frontmatter patches and marker replacements with optimistic hashes, cooldown and per-path serialization.
+- Serialize numeric frontmatter with JavaScript canonical number spelling, preserving finite values across write/read roundtrips.
 - Add soft deletion with collision-safe trash destinations and separate permanent deletion.
 - Persist append-only audit lifecycle and successful-write provenance, recover incomplete attempts and rotate oversized audit databases at startup.
 - Apply reloadable path policy, quarantine and symlink protections to every mutation; refresh the index after successful runtime writes.

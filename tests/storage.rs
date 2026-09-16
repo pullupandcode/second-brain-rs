@@ -523,3 +523,64 @@ async fn canonical_case_aliases_share_optimistic_concurrency_lock() {
         assert!(a.is_ok() && b.is_ok());
     }
 }
+
+#[test]
+fn frontmatter_numbers_use_javascript_canonical_spelling_and_roundtrip() {
+    use second_brain_rs::vault::{markdown::parse_markdown, writer::with_frontmatter};
+    for (number, spelling) in [
+        (1e-7, "1e-7"),
+        (1e21, "1e+21"),
+        (1e-6, "0.000001"),
+        (1e20, "100000000000000000000"),
+        (-0.0, "0"),
+        (f64::from_bits(1), "5e-324"),
+        (f64::MIN_POSITIVE, "2.2250738585072014e-308"),
+        (f64::MAX, "1.7976931348623157e+308"),
+        (f64::MIN, "-1.7976931348623157e+308"),
+        (f64::from_bits(1.0_f64.to_bits() + 1), "1.0000000000000002"),
+    ] {
+        let values = BTreeMap::from([("number".into(), FrontmatterValue::Number(number))]);
+        let source = with_frontmatter("body", Some(&values)).unwrap();
+        assert_eq!(source, format!("---\nnumber: {spelling}\n---\nbody"));
+        let parsed = parse_markdown(&source);
+        let actual = match parsed.frontmatter.get("number") {
+            Some(FrontmatterValue::Number(number)) => Some(number.to_bits()),
+            _ => None,
+        };
+        let expected_bits = if number == 0.0 {
+            0.0_f64.to_bits()
+        } else {
+            number.to_bits()
+        };
+        assert_eq!(actual, Some(expected_bits), "{spelling}");
+    }
+}
+
+#[test]
+fn frontmatter_nonfinite_numbers_remain_rejected() {
+    use second_brain_rs::vault::writer::with_frontmatter;
+    for number in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let values = BTreeMap::from([("number".into(), FrontmatterValue::Number(number))]);
+        let error = with_frontmatter("body", Some(&values)).unwrap_err();
+        assert_eq!(error.code(), "invalid_frontmatter");
+        assert_eq!(error.to_string(), "Frontmatter numbers must be finite");
+    }
+}
+
+proptest::proptest! {
+    #[test]
+    fn finite_frontmatter_number_bits_roundtrip(bits in proptest::num::u64::ANY) {
+        use second_brain_rs::vault::{markdown::parse_markdown, writer::with_frontmatter};
+        let number=f64::from_bits(bits);
+        proptest::prop_assume!(number.is_finite());
+        let values=BTreeMap::from([("number".into(),FrontmatterValue::Number(number))]);
+        let source=with_frontmatter("body",Some(&values)).unwrap();
+        let parsed=parse_markdown(&source);
+        let actual=match parsed.frontmatter.get("number") {
+            Some(FrontmatterValue::Number(number))=>Some(number.to_bits()),
+            _=>None,
+        };
+        let expected=if number == 0.0 {0.0_f64.to_bits()} else {bits};
+        proptest::prop_assert_eq!(actual,Some(expected));
+    }
+}

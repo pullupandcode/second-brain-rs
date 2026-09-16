@@ -561,7 +561,9 @@ pub fn with_frontmatter(
                     "Frontmatter numbers must be finite",
                 ));
             }
-            FrontmatterValue::Number(number) => number.to_string(),
+            FrontmatterValue::Number(number) => {
+                ryu_js::Buffer::new().format_finite(*number).to_owned()
+            }
             FrontmatterValue::List(items) => format!(
                 "[{}]",
                 items
