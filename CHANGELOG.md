@@ -11,8 +11,10 @@
 - Complete 31 base/34 optional-OCR tool schemas and eight-scope discovery.
 - Load/reload vault skill maps, admin diagnostics and separately scoped prompts;
   share privacy policy across readers/index and future writers, including aliases.
-- Apply Unicode case-insensitive hard denies across platforms, including missing
-  path prefixes and skill reloads, to prevent configured-denylist case bypasses.
+- NFC-normalize hard-deny comparisons before Unicode case-insensitive matching
+  across platforms, including missing
+  path prefixes and skill reloads, to prevent configured-denylist case and
+  canonical-Unicode-alias bypasses.
   Soft ignored globs and ordinary path identity remain case-sensitive.
 - Add in-memory OCR notebook/renumber queue and status contract.
 - Fix empty root/search inputs, canonical folder listings, directory errors,

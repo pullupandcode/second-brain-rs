@@ -84,8 +84,9 @@ construct a runtime and must not persist numeric Scope discriminants.
 The reviewer reproduced `Private/**` failing to protect an actual lowercase
 `private` directory on a case-insensitive filesystem. Canonicalizing existing
 paths alone cannot protect differently cased configured patterns or not-yet-created
-prefixes. PathPolicy now compiles its hard-deny patterns with anchored Unicode
-case-insensitive matching, using the existing regex dependency. It retains the
+prefixes. PathPolicy now NFC-normalizes hard-deny patterns and candidate paths before
+anchored Unicode case-insensitive matching, using unicode-normalization0.1.25
+and the existing regex dependency. It retains the
 same supported glob subset and original spelling in snapshots. New rules compile
 before atomic replacement so every shared reader, index query and future writer
 sees the same policy after skill reload. A regex compilation failure fails closed.
@@ -95,7 +96,7 @@ This is intentional stricter security behavior than the pinned reference: even
 on a case-sensitive filesystem, a deny also protects differently cased distinct
 paths. Ordinary path identity, write-lock identity and index identity are not
 case-normalized. Unicode simple case folding includes variants such as sigma;
-this change does not introduce arbitrary Unicode normalization of path identity.
+normalization applies only to hard-policy comparisons, not ordinary path identity.
 
 RED on predecessor `ffe4a0ac7bd93a7f30d335787e70209b5fb71b4e` with only new tests:
 `hard_denies_ignore_case_in_existing_and_future_paths` missed private/secret.md;
@@ -107,3 +108,25 @@ Raw receipts: `/private/tmp/parity-admin/a-case-policy-red.log`,
 `a-case-integration-red.log`, `a-case-policy-green.log`, and
 `a-case-integration-green.log` (same directory). Final full-suite receipts are
 maintained by the coordinator for the reviewed head.
+
+
+## Canonical Unicode normalization aliases (QA regression)
+
+Independent QA then reproduced a composed NFC `Futuré/**` rule failing to protect
+an NFD `Future\u{301}` directory on a normalization-insensitive filesystem.
+Hard-deny compilation and candidate matching now both normalize to NFC before the
+existing Unicode casefolding. Configured pattern snapshots retain their original
+spelling; ordinary reader/index/writer path identity and soft ignored globs do not
+normalize. Missing prefixes and rule replacements receive identical protection.
+This intentionally also denies canonically equivalent distinct filenames on
+normalization-sensitive filesystems. Canonical normalization is NFC, not NFKC.
+
+RED: `hard_denies_normalize_canonical_unicode_equivalents` missed the nonexistent
+NFD prefix; `hard_denies_normalize_unicode_across_reads_and_skill_reload` exposed
+the existing NFD protected note. The regressions also cover both NFC/NFD directions,
+read/list/search denial before/after skill reload, newly private Unicode skill
+aliases, snapshot preservation, and future-write-path policy. Raw receipts are
+`/private/tmp/parity-admin/a-nfc-policy-red.log` and `a-nfc-integration-red.log`;
+matching `a-nfc-policy-green.log` and `a-nfc-integration-green.log` contain passing
+runs. The new dependency is unicode-normalization0.1.25, verified/fetched by the
+coordinator; the final dependency audit must be rerun for this candidate.

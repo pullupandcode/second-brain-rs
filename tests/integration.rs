@@ -816,3 +816,99 @@ async fn hard_denies_cover_configured_case_aliases_and_skill_reload() {
         );
     }
 }
+
+#[tokio::test]
+async fn hard_denies_normalize_unicode_across_reads_and_skill_reload() {
+    let (dir, config) = fixture().await;
+    let vault = dir.path().join("vault");
+    let folder = "Future\u{301}";
+    let private_path = format!("{folder}/private.md");
+    tokio::fs::create_dir(vault.join(folder)).await.unwrap();
+    tokio::fs::write(vault.join(&private_path), "normalizationcanary")
+        .await
+        .unwrap();
+    tokio::fs::write(vault.join("Map.md"), "# Empty map")
+        .await
+        .unwrap();
+    tokio::fs::write(
+        vault.join("Cafe\u{301}.md"),
+        "---\nname: cafe\ndescription: Normalized privacy\n---\nunicodeskillcanary",
+    )
+    .await
+    .unwrap();
+    let mut config = (*config).clone();
+    config
+        .security
+        .blocked_paths
+        .extend(["Futuré/**".to_owned(), "Uncréated/**".to_owned()]);
+    config.skills.map_paths = vec!["Map.md".to_owned()];
+    let runtime = Runtime::create(Arc::new(config)).await.unwrap();
+    let policy = runtime.path_policy();
+    for reload in [false, true] {
+        if reload {
+            tokio::fs::write(vault.join("Map.md"), "[[Cafe\u{301}.md]]")
+                .await
+                .unwrap();
+            runtime
+                .dispatch("skills_reload", &Map::new())
+                .await
+                .unwrap();
+            assert_eq!(runtime.loaded_skills().await.len(), 1);
+            assert!(policy.is_blocked("CAFÉ.MD"));
+            assert!(
+                runtime
+                    .dispatch("read_note", &args(json!({"path":"Cafe\u{301}.md"})))
+                    .await
+                    .is_err()
+            );
+            assert!(
+                runtime
+                    .dispatch("search", &args(json!({"query":"unicodeskillcanary"})))
+                    .await
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        assert!(
+            runtime
+                .dispatch("read_note", &args(json!({"path":private_path})))
+                .await
+                .is_err()
+        );
+        assert!(
+            runtime
+                .dispatch("list_folder", &args(json!({"path":folder})))
+                .await
+                .is_err()
+        );
+        let listing = runtime
+            .dispatch("list_folder", &args(json!({"path":"", "recursive":true})))
+            .await
+            .unwrap();
+        assert!(
+            !listing
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["path"] == private_path)
+        );
+        assert!(
+            runtime
+                .dispatch("search", &args(json!({"query":"normalizationcanary"})))
+                .await
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(policy.is_blocked("Uncre\u{301}ated/missing/new.md"));
+        assert!(
+            runtime
+                .dispatch("read_note", &args(json!({"path":"Notes/apple.md"})))
+                .await
+                .is_ok()
+        );
+    }
+}

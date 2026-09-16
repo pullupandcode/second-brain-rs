@@ -9,7 +9,9 @@
 
 use std::sync::{Arc, RwLock};
 
-/// Shared effective hard denylist, matched case-insensitively on every platform.
+use unicode_normalization::UnicodeNormalization;
+
+/// Shared hard denylist, NFC-normalized and matched case-insensitively on every platform.
 ///
 /// Ordinary vault path identity and soft ignored-glob matching remain unchanged.
 /// Matching does not depend on files existing, so new paths receive the same
@@ -43,6 +45,7 @@ impl PathPolicy {
     /// Test a vault-relative path against the current case-insensitive hard denylist.
     #[must_use]
     pub fn is_blocked(&self, path: &str) -> bool {
+        let path: String = path.nfc().collect();
         self.0
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -51,7 +54,7 @@ impl PathPolicy {
             .any(|matcher| {
                 matcher
                     .as_ref()
-                    .is_none_or(|matcher| matcher.is_match(path))
+                    .is_none_or(|matcher| matcher.is_match(&path))
             })
     }
     /// Atomically replace the effective denylist. Compilation happens before locking.
@@ -73,9 +76,10 @@ impl PathPolicy {
     }
 }
 
-// Preserve the glob subset below, changing only hard-deny case comparison.
+// Preserve the glob subset below; only hard-deny comparison folds Unicode/case.
 fn compile_deny_pattern(pattern: &str) -> Result<regex::Regex, regex::Error> {
-    let source = deny_pattern_source(pattern);
+    let pattern: String = pattern.nfc().collect();
+    let source = deny_pattern_source(&pattern);
     regex::RegexBuilder::new(&format!(r"\A{source}\z"))
         .case_insensitive(true)
         .unicode(true)
@@ -233,6 +237,26 @@ mod tests {
         policy.replace(vec!["NewSkills/**".to_owned()]);
         assert!(clone.is_blocked("newskills/missing.md"));
         assert!(!clone.is_blocked("private/secret.md"));
+    }
+
+    #[test]
+    fn hard_denies_normalize_canonical_unicode_equivalents() {
+        let patterns = vec!["Futuré/**".to_owned(), "Decompose\u{301}d/**".to_owned()];
+        let policy = PathPolicy::new(patterns.clone());
+        assert!(policy.is_blocked("Future\u{301}/missing/new.md"));
+        assert!(!policy.is_blocked("Décomposed/open.md"));
+        assert!(policy.is_blocked("Decomposéd/missing.md"));
+        assert!(!policy.is_blocked("Future/visible.md"));
+        assert_eq!(policy.snapshot(), patterns);
+        assert!(!matches_vault_path_pattern(
+            "Futuré/**",
+            "Future\u{301}/new.md"
+        ));
+        let clone = policy.clone();
+        policy.replace(vec!["Skills/Cafe\u{301}.md".to_owned()]);
+        assert!(clone.is_blocked("skills/CAFÉ.MD"));
+        assert!(!clone.is_blocked("Future\u{301}/new.md"));
+        assert_eq!(clone.snapshot(), vec!["Skills/Cafe\u{301}.md".to_owned()]);
     }
 
     #[test]
