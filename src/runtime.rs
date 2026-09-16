@@ -280,7 +280,7 @@ impl Runtime {
                 self.writer
                     .create_note(
                         &path,
-                        &require_text(args, "content")?,
+                        &require_string(args, "content")?,
                         frontmatter_arg(args, "frontmatter")?.as_ref(),
                     )
                     .await?
@@ -289,7 +289,7 @@ impl Runtime {
                 self.writer
                     .replace_note(
                         &path,
-                        &require_text(args, "content")?,
+                        &require_string(args, "content")?,
                         &require_string(args, "base_sha256")?,
                         frontmatter_arg(args, "frontmatter")?.as_ref(),
                     )
@@ -311,7 +311,7 @@ impl Runtime {
                     .replace_section_by_marker(
                         &path,
                         &require_string(args, "marker_name")?,
-                        &require_text(args, "content")?,
+                        &require_string(args, "content")?,
                         &require_string(args, "base_sha256")?,
                     )
                     .await?
@@ -589,12 +589,6 @@ fn optional_bool(args: &Map<String, Value>, key: &str) -> Result<Option<bool>, D
     }
 }
 
-fn require_text(args: &Map<String, Value>, key: &str) -> Result<String, DispatchError> {
-    args.get(key)
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| DispatchError::Invalid(format!("{key} must be a string")))
-}
 fn frontmatter_arg(
     args: &Map<String, Value>,
     key: &str,
@@ -614,23 +608,24 @@ fn frontmatter_arg(
         let parsed = match value {
             Value::String(v) => F::String(v.clone()),
             Value::Bool(v) => F::Bool(*v),
-            Value::Number(v) => F::Number(
-                v.as_f64()
-                    .ok_or_else(|| DispatchError::Invalid("invalid frontmatter number".into()))?,
-            ),
+            Value::Number(v) => F::Number(v.as_f64().ok_or_else(|| {
+                DispatchError::Invalid(format!("{key}.{name} must be a frontmatter value"))
+            })?),
             Value::Array(v) => F::List(
                 v.iter()
                     .map(|v| {
                         v.as_str().map(str::to_owned).ok_or_else(|| {
-                            DispatchError::Invalid("frontmatter arrays must contain strings".into())
+                            DispatchError::Invalid(format!(
+                                "{key}.{name} must be a frontmatter value"
+                            ))
                         })
                     })
                     .collect::<Result<_, _>>()?,
             ),
             Value::Null | Value::Object(_) => {
-                return Err(DispatchError::Invalid(
-                    "unsupported frontmatter value".into(),
-                ));
+                return Err(DispatchError::Invalid(format!(
+                    "{key}.{name} must be a frontmatter value"
+                )));
             }
         };
         result.insert(name.clone(), parsed);

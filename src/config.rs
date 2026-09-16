@@ -312,6 +312,18 @@ struct RawLogging {
     log_args: bool,
 }
 
+impl RawDeletes {
+    fn validate(self) -> Result<DeletesConfig, ConfigError> {
+        let path = non_empty(
+            self.trash_path.unwrap_or_else(|| ".trash/mcp".to_owned()),
+            "deletes.trash_path",
+        )?;
+        Ok(DeletesConfig {
+            trash_path: normalize_vault_path(&path).map_err(|e| invalid(&e.to_string()))?,
+        })
+    }
+}
+
 impl RawConfig {
     fn validate(self) -> Result<ServerConfig, ConfigError> {
         let public_base_url = parse_http_url(&self.public_base_url, "public_base_url")?;
@@ -393,15 +405,7 @@ impl RawConfig {
             writes: WritesConfig {
                 cooldown_seconds: self.writes.cooldown_seconds,
             },
-            deletes: DeletesConfig {
-                trash_path: normalize_vault_path(&non_empty(
-                    self.deletes
-                        .trash_path
-                        .unwrap_or_else(|| ".trash/mcp".to_owned()),
-                    "deletes.trash_path",
-                )?)
-                .map_err(|e| invalid(&e.to_string()))?,
-            },
+            deletes: self.deletes.validate()?,
             audit: AuditConfig {
                 retention_max_rows: self.audit.retention_max_rows.unwrap_or(0),
                 archive_path: self.audit.archive_path,

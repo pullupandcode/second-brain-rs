@@ -402,7 +402,8 @@ async fn mcp_roundtrip_enforces_each_request_scope() {
         json!({"name":"create_note","arguments":{"path":"x.md","content":"x"}}),
     )
     .await;
-    assert!(pending["error"].is_object() || pending["result"]["isError"] == true);
+    // Storage is implemented in v0.3.0; a permitted call now succeeds.
+    assert_eq!(pending["result"]["structuredContent"]["path"], "x.md");
 }
 
 #[tokio::test]
@@ -1155,4 +1156,221 @@ async fn call_params_ignore_reference_extra_fields() {
         assert_eq!(response["id"], 1.5);
         assert_eq!(response["error"]["code"], -32601);
     }
+}
+
+#[tokio::test]
+async fn mcp_storage_roundtrip_scopes_errors_and_recovery() {
+    use second_brain_rs::vault::audit::VaultWriteAuditStore;
+    let (dir, base) = spawn().await;
+    let create = rpc(&base, "vault:write", "tools/call", json!({"name":"create_note","arguments":{"path":"Notes/write.md","content":"<!-- mcp:section summary start -->\nold\n<!-- mcp:section summary end -->","frontmatter":{"title":"Written"}}})).await;
+    let created = &create["result"]["structuredContent"];
+    assert_eq!(created["path"], "Notes/write.md", "{create}");
+    let base_hash = created["resultSha256"].as_str().unwrap();
+    for scope in [
+        "vault:read",
+        "vault:capture",
+        "daily:append",
+        "vault:delete",
+        "vault:delete:hard",
+    ] {
+        let denied = rpc(&base, scope, "tools/call", json!({"name":"replace_note","arguments":{"path":"Notes/write.md","content":"denied","base_sha256":base_hash}})).await;
+        assert_eq!(denied["error"]["code"], -32003, "{denied}");
+    }
+    let stale = rpc(&base, "vault:write", "tools/call", json!({"name":"replace_note","arguments":{"path":"Notes/write.md","content":"stale","base_sha256":"bad"}})).await;
+    assert_eq!(
+        stale["error"]["data"]["code"], "retryable_conflict",
+        "{stale}"
+    );
+    assert_eq!(stale["error"]["data"]["currentSha256"], base_hash);
+    let marker = rpc(&base, "vault:write", "tools/call", json!({"name":"replace_section_by_marker","arguments":{"path":"Notes/write.md","marker_name":"summary","content":"searchablemutation","base_sha256":base_hash}})).await;
+    let next_hash = marker["result"]["structuredContent"]["resultSha256"]
+        .as_str()
+        .unwrap();
+    let patch = rpc(&base, "vault:write", "tools/call", json!({"name":"update_frontmatter","arguments":{"path":"Notes/write.md","patch":{"done":true},"base_sha256":next_hash}})).await;
+    let next_hash = patch["result"]["structuredContent"]["resultSha256"]
+        .as_str()
+        .unwrap();
+    let read = rpc(
+        &base,
+        "vault:read",
+        "tools/call",
+        json!({"name":"read_note","arguments":{"path":"Notes/write.md"}}),
+    )
+    .await;
+    assert_eq!(
+        read["result"]["structuredContent"]["parsed"]["frontmatter"]["done"],
+        true
+    );
+    let search = rpc(
+        &base,
+        "vault:read",
+        "tools/call",
+        json!({"name":"search","arguments":{"query":"searchablemutation"}}),
+    )
+    .await;
+    assert_eq!(
+        search["result"]["structuredContent"]["result"][0]["path"],
+        "Notes/write.md"
+    );
+    for (scope, tool) in [
+        ("vault:write", "delete_note"),
+        ("vault:delete", "hard_delete_note"),
+        ("vault:delete:hard", "delete_note"),
+    ] {
+        let denied = rpc(
+            &base,
+            scope,
+            "tools/call",
+            json!({"name":tool,"arguments":{"path":"Notes/write.md","base_sha256":next_hash}}),
+        )
+        .await;
+        assert_eq!(denied["error"]["code"], -32003);
+    }
+    let deleted = rpc(
+        &base,
+        "vault:delete",
+        "tools/call",
+        json!({"name":"delete_note","arguments":{"path":"Notes/write.md","base_sha256":next_hash}}),
+    )
+    .await;
+    assert_eq!(
+        deleted["result"]["structuredContent"]["deletedPath"],
+        ".trash/mcp/Notes/write.md"
+    );
+    assert!(!dir.path().join("vault/Notes/write.md").exists());
+    let hard = rpc(&base, "vault:delete:hard", "tools/call", json!({"name":"hard_delete_note","arguments":{"path":".trash/mcp/Notes/write.md","base_sha256":next_hash}})).await;
+    assert_eq!(
+        hard["result"]["structuredContent"]["path"],
+        ".trash/mcp/Notes/write.md"
+    );
+    assert!(!dir.path().join("vault/.trash/mcp/Notes/write.md").exists());
+    let audit = VaultWriteAuditStore::open(&dir.path().join("state/write-audit.sqlite")).unwrap();
+    assert_eq!(audit.list_recent_writes(None).unwrap().len(), 5);
+}
+
+#[tokio::test]
+async fn mcp_storage_blocking_and_recovery_diagnostics() {
+    use second_brain_rs::vault::audit::{AuditInput, VaultWriteAuditStore};
+    let (dir, base) = spawn().await;
+    for (path, code) in [
+        ("Private/new.md", "path_blocked"),
+        ("Notes/n.md", "path_quarantined"),
+    ] {
+        let denied = rpc(
+            &base,
+            "vault:write",
+            "tools/call",
+            json!({"name":"create_note","arguments":{"path":path,"content":"denied"}}),
+        )
+        .await;
+        assert_eq!(denied["error"]["data"]["code"], code, "{denied}");
+    }
+    let audit = VaultWriteAuditStore::open(&dir.path().join("state/write-audit.sqlite")).unwrap();
+    assert!(audit.list_recent_writes(None).unwrap().is_empty());
+    let attempt = audit
+        .record_write_started(&AuditInput {
+            operation: "replace_note".into(),
+            path: "crashed.md".into(),
+            base_sha256: Some("old".into()),
+            metadata: json!({}),
+        })
+        .unwrap();
+    let recovery = rpc(
+        &base,
+        "admin",
+        "tools/call",
+        json!({"name":"list_write_recovery_diagnostics","arguments":{}}),
+    )
+    .await;
+    assert_eq!(
+        recovery["result"]["structuredContent"]["incompleteWrites"][0]["attemptId"],
+        attempt
+    );
+    let denied = rpc(
+        &base,
+        "vault:write",
+        "tools/call",
+        json!({"name":"list_write_recovery_diagnostics","arguments":{}}),
+    )
+    .await;
+    assert_eq!(denied["error"]["code"], -32003);
+}
+
+#[tokio::test]
+async fn mcp_skill_reload_immediately_blocks_all_write_operations() {
+    let (dir, config) = fixture().await;
+    let mut config = (*config).clone();
+    config.skills.map_paths = vec!["Map.md".into()];
+    let vault = dir.path().join("vault");
+    tokio::fs::write(vault.join("Map.md"), "[[Skill]]")
+        .await
+        .unwrap();
+    tokio::fs::write(
+        vault.join("Skill.md"),
+        "---\nname: old\ndescription: old\n---\nold",
+    )
+    .await
+    .unwrap();
+    let config = Arc::new(config);
+    let runtime = Runtime::create(Arc::clone(&config)).await.unwrap();
+    let handler = SecondBrainHandler::new(&config, runtime);
+    let app = build_router(AppState {
+        config,
+        authenticator: Arc::new(DevAuthenticator::new(HashSet::new())),
+        handler,
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let created = rpc(&base,"vault:write","tools/call",json!({"name":"create_note","arguments":{"path":"NewSkill.md","content":"---\nname: fresh\ndescription: fresh\n---\nnew"}})).await;
+    let hash = created["result"]["structuredContent"]["resultSha256"]
+        .as_str()
+        .unwrap();
+    tokio::fs::write(vault.join("Map.md"), "[[Skill]]\n[[NewSkill]]")
+        .await
+        .unwrap();
+    rpc(
+        &base,
+        "admin",
+        "tools/call",
+        json!({"name":"skills_reload","arguments":{}}),
+    )
+    .await;
+    for (scope, tool, extra) in [
+        ("vault:write", "create_note", json!({"content":"denied"})),
+        ("vault:write", "replace_note", json!({"content":"denied"})),
+        (
+            "vault:write",
+            "update_frontmatter",
+            json!({"patch":{"title":"denied"}}),
+        ),
+        (
+            "vault:write",
+            "replace_section_by_marker",
+            json!({"content":"denied","marker_name":"x"}),
+        ),
+        ("vault:delete", "delete_note", json!({})),
+        ("vault:delete:hard", "hard_delete_note", json!({})),
+    ] {
+        let mut input = extra.as_object().unwrap().clone();
+        input.insert("path".into(), json!("NewSkill.md"));
+        input.insert("base_sha256".into(), json!(hash));
+        let denied = rpc(
+            &base,
+            scope,
+            "tools/call",
+            json!({"name":tool,"arguments":input}),
+        )
+        .await;
+        assert_eq!(
+            denied["error"]["data"]["code"], "path_blocked",
+            "{tool}: {denied}"
+        );
+    }
+    assert!(
+        tokio::fs::read_to_string(vault.join("NewSkill.md"))
+            .await
+            .unwrap()
+            .ends_with("new")
+    );
 }

@@ -420,3 +420,29 @@ async fn concurrent_creates_from_separate_writers_cannot_overwrite() {
     }
     assert_eq!(count, 1);
 }
+
+#[test]
+fn frontmatter_escaped_string_and_list_roundtrip() {
+    use second_brain_rs::vault::{markdown::parse_markdown, writer::with_frontmatter};
+    let values = BTreeMap::from([
+        (
+            "text".into(),
+            FrontmatterValue::String("line one\nline \\\" two".into()),
+        ),
+        (
+            "list".into(),
+            FrontmatterValue::List(vec!["comma, inside".into(), "a\\b".into(), "a\"b".into()]),
+        ),
+    ]);
+    assert_eq!(
+        parse_markdown(&with_frontmatter("body", Some(&values)).unwrap()).frontmatter,
+        values
+    );
+    let invalid = BTreeMap::from([("bad:key".into(), FrontmatterValue::Bool(true))]);
+    assert_eq!(
+        with_frontmatter("body", Some(&invalid))
+            .unwrap_err()
+            .to_string(),
+        "Invalid frontmatter key: bad:key"
+    );
+}

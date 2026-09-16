@@ -51,15 +51,26 @@ The property test covers valid frontmatter scalars and body preservation.
   diagnostic and a temporary file; no automatic rollback is claimed. Recovery
   diagnostics deliberately report ambiguity rather than guessing completion.
 
-## Integration still required before approval
+## Integrated candidate
 
-This draft begins on the existing phase-2 baseline. A must merge first. Rebase B
-onto A's squash merge, keep A's PathPolicy implementation and share Runtime's
-policy with the writer so skill reload changes apply. Preserve A's protocol error
-mapping and exact deletion scopes/schema. Exercise create/update/delete/recovery
-and denied scopes over HTTP against that integrated candidate. C consumes the
-shared audited `Runtime::writer()` API for all framework-related mutations.
-Run all required gates on the final rebased candidate and record exact results.
+The B commits are rebased onto approved A head
+`ffe4a0ac7bd93a7f30d335787e70209b5fb71b4e` pending its squash merge. Runtime,
+reader, index and writer share A's reloadable PathPolicy. Existing OCR coded
+errors, MCP request authentication, prompts and exact eight-scope registry are
+preserved. The three added HTTP tests exercise primitive write roundtrips,
+frontmatter/marker updates, current-hash conflict data, immediate search refresh,
+separate delete scopes, blocked/quarantined paths, recovery diagnostics, and
+skill reload blocking every mutation. A's old pending-create assertion now checks
+successful creation because storage is implemented.
+
+Two additional runtime tests verify configured trash destinations, rotation during
+Runtime::create, and invalid input errors without creating files or successful
+audit rows. String/list serialization tests cover escaped quotes, backslashes,
+newlines and embedded commas against A's parser.
+
+The final rebase onto A's actual squash commit remains necessary before merging B.
+Both independent reviewers must approve the resulting exact head, and required
+CI must pass. C consumes Runtime::writer() for audited framework mutations.
 
 ## Standalone draft checks (2026-09-16)
 
@@ -76,3 +87,16 @@ Run all required gates on the final rebased candidate and record exact results.
   network; routed to coordinator. New APIs are additive; 0.3.0 is a pre-1.0 minor.
 
 These preliminary checks do not replace final integrated-head review and QA.
+
+## Integrated verification (2026-09-16)
+
+- Nightly format and all-target/all-feature Clippy with warnings denied: passed.
+- Storage integration tests: 11 passed; runtime mutation/retention tests: 2 passed.
+- Coordinator rerun of HTTP storage and reload privacy tests: passed with socket
+  access. Local sandbox cannot bind TCP listeners; central full-suite run records
+  the final HTTP result.
+- Dependency gates remain required on the final reviewed head; no advisory or
+  license waiver was introduced.
+- Central full-suite run passed: 55 library + 25 HTTP/integration + 11 storage
+  tests (91 total). The two additional storage_runtime tests passed separately
+  after that run. All 93 tests are included in the candidate's required CI run.
