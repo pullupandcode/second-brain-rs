@@ -9,6 +9,9 @@
 - Persist append-only audit lifecycle and successful-write provenance, recover incomplete attempts and rotate oversized audit databases at startup.
 - Apply reloadable path policy, quarantine and symlink protections to every mutation; refresh the index after successful runtime writes.
 - Add `[deletes].trash_path` and writer APIs for framework, capture and daily-note workflows.
+- Resolve filesystem spelling before mutation policy and locking, closing case-alias bypasses on case-insensitive filesystems; serialize index snapshot refreshes.
+- Intentional pre-1.0 API change: `Runtime` no longer implements `UnwindSafe`
+  because shared async mutation/refresh state requires explicit panic-boundary handling.
 
 ## [0.2.0] - 2026-09-16
 

@@ -84,7 +84,8 @@ CI must pass. C consumes Runtime::writer() for audited framework mutations.
   sandbox prevented crates.io index lock acquisition, reported as a warning.
 - `cargo-deny --offline check`: coordinator escalated rerun passed all four gates.
 - `cargo-semver-checks ... --baseline-rev f50f428...`: dependency refresh needs
-  network; routed to coordinator. New APIs are additive; 0.3.0 is a pre-1.0 minor.
+  network; routed to coordinator. The preliminary baseline differs from A; final comparison against A detects
+  `Runtime` losing `UnwindSafe`, an intentional pre-1.0 minor API change.
 
 These preliminary checks do not replace final integrated-head review and QA.
 
@@ -100,3 +101,25 @@ These preliminary checks do not replace final integrated-head review and QA.
 - Central full-suite run passed: 55 library + 25 HTTP/integration + 11 storage
   tests (91 total). The two additional storage_runtime tests passed separately
   after that run. All 93 tests are included in the candidate's required CI run.
+
+## Independent review corrections
+
+The code reviewer reproduced a case-alias policy and lock bypass on this host's
+case-insensitive filesystem. Two new regression tests were run before the fix:
+blocked-directory alias creation succeeded, and both same-hash alias replacements
+succeeded (RED: 0 passed, 2 failed). The writer now resolves existing targets or
+their nearest existing ancestors to canonical filesystem spelling, checks both
+lexical and canonical policy/quarantine paths, and keys locks by that identity.
+Identity is rechecked after acquiring a lock in case another task created a
+previously missing target. Both regressions now pass (GREEN: 2 passed), and their
+case-sensitive branches verify distinct paths remain independent.
+
+Index refresh now serializes both snapshot collection and publication, preventing
+an earlier snapshot from overwriting a later completed refresh. This addresses
+the reviewer's ordering concern even though the independent 40-create stress
+test did not reproduce a stale final index.
+
+Semver against A identifies `Runtime` losing the `UnwindSafe` auto trait. This is
+an intentional API change in pre-1.0 minor version 0.3.0; callers catching panics
+around runtime state must explicitly assess unwind safety. It is documented in
+the changelog, rather than describing all API changes as additive.

@@ -446,3 +446,78 @@ fn frontmatter_escaped_string_and_list_roundtrip() {
         "Invalid frontmatter key: bad:key"
     );
 }
+
+#[tokio::test]
+async fn canonical_case_aliases_cannot_bypass_blocking_or_quarantine() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    tokio::fs::create_dir(root.join("Private")).await.unwrap();
+    tokio::fs::write(root.join("Private/Secret.md"), "original")
+        .await
+        .unwrap();
+    tokio::fs::write(root.join("Conflict.md"), "original")
+        .await
+        .unwrap();
+    let w = writer(root, 0);
+    if tokio::fs::try_exists(root.join("private")).await.unwrap() {
+        assert_eq!(
+            w.create_note("private/injected.md", "bad", None)
+                .await
+                .unwrap_err()
+                .code(),
+            "path_blocked"
+        );
+        assert_eq!(
+            w.replace_note("private/secret.md", "bad", "anything", None)
+                .await
+                .unwrap_err()
+                .code(),
+            "path_blocked"
+        );
+        assert_eq!(
+            w.replace_note("conflict.md", "bad", "anything", None)
+                .await
+                .unwrap_err()
+                .code(),
+            "path_quarantined"
+        );
+        assert!(!root.join("Private/injected.md").exists());
+    } else {
+        // These are distinct paths on a case-sensitive filesystem.
+        assert!(
+            w.create_note("private/allowed.md", "good", None)
+                .await
+                .is_ok()
+        );
+    }
+}
+
+#[tokio::test]
+async fn canonical_case_aliases_share_optimistic_concurrency_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = writer(dir.path(), 0);
+    let created = w.create_note("Case.md", "original", None).await.unwrap();
+    if tokio::fs::try_exists(dir.path().join("case.md"))
+        .await
+        .unwrap()
+    {
+        let (a, b) = tokio::join!(
+            w.replace_note("Case.md", "first", &created.result_sha256, None),
+            w.replace_note("case.md", "second", &created.result_sha256, None)
+        );
+        assert_ne!(
+            a.is_ok(),
+            b.is_ok(),
+            "aliases must not both accept the same base hash"
+        );
+        let rejected = a.err().or_else(|| b.err()).unwrap();
+        assert_eq!(rejected.code(), "retryable_conflict");
+    } else {
+        let distinct = w.create_note("case.md", "different", None).await.unwrap();
+        let (a, b) = tokio::join!(
+            w.replace_note("Case.md", "first", &created.result_sha256, None),
+            w.replace_note("case.md", "second", &distinct.result_sha256, None)
+        );
+        assert!(a.is_ok() && b.is_ok());
+    }
+}

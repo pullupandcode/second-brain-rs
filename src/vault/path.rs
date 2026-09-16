@@ -118,6 +118,52 @@ pub async fn resolve_vault_path_for_write(
     }
 }
 
+/// Resolve the physical identity of an existing target or its nearest existing
+/// ancestor, preserving the unresolved suffix for a new target.
+///
+/// The returned relative path uses the filesystem's canonical spelling, including on
+/// case-insensitive filesystems. Callers that forbid symlinks must reject them
+/// separately before mutating the returned absolute path.
+///
+/// # Errors
+/// Returns path validation, filesystem, or outside-root errors.
+// cancel-safe: performs read-only canonicalization and builds a local result.
+pub async fn canonical_vault_path_for_write(
+    vault_root: &Path,
+    input: &str,
+) -> Result<(String, PathBuf), VaultPathError> {
+    let real_root = tokio::fs::canonicalize(vault_root).await?;
+    let mut candidate = resolve_vault_path(vault_root, input)?;
+    let mut suffix = Vec::new();
+    let mut resolved = loop {
+        match tokio::fs::canonicalize(&candidate).await {
+            Ok(existing) => break existing,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let Some(name) = candidate.file_name() else {
+                    return Err(VaultPathError::Io(error));
+                };
+                suffix.push(name.to_os_string());
+                if !candidate.pop() {
+                    return Err(VaultPathError::Io(error));
+                }
+            }
+            Err(error) => return Err(VaultPathError::Io(error)),
+        }
+    };
+    if !resolved.starts_with(&real_root) {
+        return Err(VaultPathError::OutsideRoot);
+    }
+    for component in suffix.into_iter().rev() {
+        resolved.push(component);
+    }
+    let relative = resolved
+        .strip_prefix(&real_root)
+        .map_err(|_| VaultPathError::OutsideRoot)?
+        .to_string_lossy()
+        .replace('\\', "/");
+    Ok((relative, resolved))
+}
+
 /// Whether the path has a (case-insensitive) `.md` extension.
 #[must_use]
 pub fn is_markdown_path(input: &str) -> bool {

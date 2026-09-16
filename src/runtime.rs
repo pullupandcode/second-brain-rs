@@ -75,6 +75,7 @@ pub struct Runtime {
     config: Arc<ServerConfig>,
     reader: VaultReader,
     index: Arc<VaultIndex>,
+    index_refresh: tokio::sync::Mutex<()>,
     policy: PathPolicy,
     skills: tokio::sync::RwLock<SkillLoad>,
     skill_reload: tokio::sync::Mutex<()>,
@@ -153,6 +154,7 @@ impl Runtime {
             config,
             reader,
             index,
+            index_refresh: tokio::sync::Mutex::new(()),
             policy,
             skills: tokio::sync::RwLock::new(skills),
             skill_reload: tokio::sync::Mutex::new(()),
@@ -202,6 +204,9 @@ impl Runtime {
     }
 
     async fn cold_rebuild(&self) -> Result<(), RuntimeError> {
+        // Serialize snapshot collection and publication so an older refresh
+        // cannot publish after a newer one following overlapping mutations.
+        let _refresh = self.index_refresh.lock().await;
         let files = self.reader.list_folder("", true).await?;
         let mut notes = Vec::with_capacity(files.len());
         for entry in files {

@@ -14,7 +14,7 @@ use tokio::{io::AsyncWriteExt, sync::Mutex};
 use super::{
     audit::{AuditInput, VaultWriteAuditStore, unique_id},
     markdown::{FrontmatterValue, parse_markdown},
-    path::{normalize_vault_path, resolve_vault_path_for_write},
+    path::{canonical_vault_path_for_write, normalize_vault_path, resolve_vault_path_for_write},
     policy::PathPolicy,
 };
 
@@ -217,16 +217,32 @@ impl VaultWriter {
                 "Vault path must name a file",
             ));
         }
-        let lock = {
-            let mut locks = self.locks.lock().await;
-            locks.retain(|_, lock| lock.strong_count() > 0);
-            locks.get(&path).and_then(Weak::upgrade).unwrap_or_else(|| {
-                let lock = Arc::new(Mutex::new(()));
-                locks.insert(path.clone(), Arc::downgrade(&lock));
-                lock
-            })
+        let _guard = loop {
+            let (identity, _) =
+                canonical_vault_path_for_write(&self.options.vault_root, &path).await?;
+            let lock = {
+                let mut locks = self.locks.lock().await;
+                locks.retain(|_, lock| lock.strong_count() > 0);
+                locks
+                    .get(&identity)
+                    .and_then(Weak::upgrade)
+                    .unwrap_or_else(|| {
+                        let lock = Arc::new(Mutex::new(()));
+                        locks.insert(identity.clone(), Arc::downgrade(&lock));
+                        lock
+                    })
+            };
+            let guard = lock.lock_owned().await;
+            // A previously missing path may have acquired canonical spelling while
+            // waiting. Retry under that identity before observing or changing bytes.
+            if canonical_vault_path_for_write(&self.options.vault_root, &path)
+                .await?
+                .0
+                == identity
+            {
+                break guard;
+            }
         };
-        let _guard = lock.lock().await;
         let metadata = match &mutation {
             Mutation::Marker(marker, _) => json!({"markerName":marker}),
             Mutation::Create(..)
@@ -277,21 +293,8 @@ impl VaultWriter {
         result
     }
     async fn guard(&self, path: &str) -> Result<PathBuf, VaultWriteError> {
-        if self.options.blocked_paths.is_blocked(path) {
-            return Err(VaultWriteError::new(
-                "path_blocked",
-                "Vault path is blocked",
-            ));
-        }
-        if self.options.quarantined_paths.contains(path)
-            || super::index::canonical_conflict_path(path).is_some()
-        {
-            return Err(VaultWriteError::new(
-                "path_quarantined",
-                format!("Path is quarantined: {path}"),
-            ));
-        }
-        let absolute = resolve_vault_path_for_write(&self.options.vault_root, path).await?;
+        self.check_policy(path)?;
+        resolve_vault_path_for_write(&self.options.vault_root, path).await?;
         // Refuse symlink aliases, including aliases to otherwise blocked in-vault paths.
         let mut segment = self.options.vault_root.clone();
         for component in path.split('/') {
@@ -308,7 +311,27 @@ impl VaultWriter {
                 Err(e) => return Err(e.into()),
             }
         }
-        Ok(absolute)
+        let (identity, resolved) =
+            canonical_vault_path_for_write(&self.options.vault_root, path).await?;
+        self.check_policy(&identity)?;
+        Ok(resolved)
+    }
+    fn check_policy(&self, path: &str) -> Result<(), VaultWriteError> {
+        if self.options.blocked_paths.is_blocked(path) {
+            return Err(VaultWriteError::new(
+                "path_blocked",
+                "Vault path is blocked",
+            ));
+        }
+        if self.options.quarantined_paths.contains(path)
+            || super::index::canonical_conflict_path(path).is_some()
+        {
+            return Err(VaultWriteError::new(
+                "path_quarantined",
+                format!("Path is quarantined: {path}"),
+            ));
+        }
+        Ok(())
     }
     async fn apply(
         &self,
