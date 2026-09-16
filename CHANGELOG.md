@@ -17,6 +17,9 @@
   canonical-Unicode-alias bypasses.
   Soft ignored globs and ordinary path identity remain case-sensitive.
 - Add in-memory OCR notebook/renumber queue and status contract.
+- Preserve correctly rounded floating-point JSON tool arguments and correlate
+  fractional or large numeric JSON-RPC IDs through the stateless transport;
+  normalize input numbers to ECMAScript precision, including integers above 2^53.
 - Match ECMAScript canonical numeric scalar formatting, including exponent
   thresholds, signed zero and finite-number checks; share the parser with
   framework schema parsing.

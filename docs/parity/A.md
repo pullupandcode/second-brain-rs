@@ -149,3 +149,32 @@ predecessor83b83b5: 1e-7 was incorrectly a string; receipt
 `/private/tmp/parity-admin/a-numeric-red.log`. GREEN after implementation is
 `a-numeric-green.log` in the same directory. The coordinator verified/fetched
 ryu-js1.0.3; dependency checks must run on the updated lockfile.
+
+
+## Raw JSON number and request-ID parity (QA regression)
+
+A raw HTTP JSON argument `1.9140508460772142e+26` lost one ULP in serde_json's
+non-roundtrip float parser. Enable its `float_roundtrip` feature so the preflight,
+rmcp arguments and response decoding all preserve the correctly rounded f64.
+No new dependency is introduced. The regression sends literal JSON through the
+Axum/rmcp/OCR queue/status path and compares returned bits with the known value.
+RED/GREEN: `/private/tmp/parity-admin/a-json-number-{red,green}.log`.
+
+rmcp represents numeric request IDs as i64 and otherwise silently interpreted
+valid fractional/large numeric-ID requests as notifications. The stateless HTTP
+adapter now substitutes a string only for numbers outside rmcp's representation
+and restores the reference-rounded JSON number on that request's JSON result/error.
+There is no shared mapping or session state. Ordinary integer/string IDs and
+notifications retain their behavior. The regression covers positive/negative
+fractional and large numbers, integral float spelling, success/error replies,
+a string resembling an adapted ID, and notification202 with an empty body.
+RED/GREEN: `/private/tmp/parity-admin/a-numeric-id-{red,green}.log`.
+
+Input numbers are normalized to ECMAScript binary64 precision, including integer
+literals beyond 2^53 and signed zero. Canonical integer representations are retained
+for integer argument validation; numeric strings are unchanged. This normalization
+also applies to IDs in early preflight results/errors. The regression covers safe
+integer controls, positive/negative 2^53+1, u64::MAX, signed zero, and OCR integer
+arguments. RED on the pre-normalization adapter returned 9007199254740993 instead
+of 9007199254740992; GREEN rounds it like JSON.parse.
+Receipts: `/private/tmp/parity-admin/a-json-integer-{red,green}.log`.

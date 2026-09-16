@@ -912,3 +912,146 @@ async fn hard_denies_normalize_unicode_across_reads_and_skill_reload() {
         );
     }
 }
+
+async fn raw_mcp(router: &axum::Router, body: String) -> Value {
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use tower::ServiceExt;
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("host", "localhost")
+                .header("authorization", "Bearer scope=admin vault:read")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1_000_000).await.unwrap();
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&bytes));
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn ocr_router() -> (tempfile::TempDir, axum::Router) {
+    let (dir, config) = fixture().await;
+    let mut config = (*config).clone();
+    config.ocr.enabled = true;
+    let config = Arc::new(config);
+    let runtime = Runtime::create(Arc::clone(&config)).await.unwrap();
+    let router = build_router(AppState {
+        handler: SecondBrainHandler::new(&config, runtime),
+        authenticator: Arc::new(DevAuthenticator::new(HashSet::new())),
+        config,
+    });
+    (dir, router)
+}
+
+#[tokio::test]
+async fn raw_json_tool_arguments_preserve_f64_bits() {
+    let (_dir, router) = ocr_router().await;
+    let queued = raw_mcp(&router, r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ocr_notebook","arguments":{"identifier":"roundtrip","pages":[1.9140508460772142e+26]}}}"#.to_owned()).await;
+    let job_id = &queued["result"]["structuredContent"]["job_id"];
+    assert!(job_id.is_string());
+    let status = raw_mcp(&router, json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ocr_status","arguments":{"job_id":job_id}}}).to_string()).await;
+    let returned = status["result"]["structuredContent"]["input"]["pages"][0]
+        .as_f64()
+        .unwrap();
+    assert_eq!(returned.to_bits(), 1.914_050_846_077_214_2e26_f64.to_bits());
+}
+
+#[tokio::test]
+async fn numeric_json_rpc_ids_receive_correlated_responses() {
+    let (_dir, router) = ocr_router().await;
+    for raw_id in [
+        "1",
+        "-1",
+        "1.0",
+        "1.5",
+        "-1.5",
+        "9007199254740992",
+        "1.9140508460772142e+26",
+        "-1.9140508460772142e+26",
+    ] {
+        for method in ["tools/list", "tools/call"] {
+            let response = raw_mcp(&router, format!(r#"{{"jsonrpc":"2.0","id":{raw_id},"method":"{method}","params":{{"name":"missing","arguments":{{}}}}}}"#)).await;
+            assert_eq!(
+                response["id"].as_f64().unwrap().to_bits(),
+                raw_id.parse::<f64>().unwrap().to_bits(),
+                "id={raw_id}"
+            );
+            if method == "tools/call" {
+                assert_eq!(response["error"]["code"], -32601);
+            } else {
+                assert!(response["result"]["tools"].is_array());
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn numeric_id_mapping_preserves_string_ids_and_notifications() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use tower::ServiceExt;
+    let (_dir, router) = ocr_router().await;
+    let response = raw_mcp(
+        &router,
+        json!({"jsonrpc":"2.0","id":"number:1.5","method":"tools/list"}).to_string(),
+    )
+    .await;
+    assert_eq!(response["id"], "number:1.5");
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("host", "localhost")
+                .body(Body::from(
+                    r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 202);
+    assert!(
+        to_bytes(response.into_body(), 1000)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn raw_json_numbers_match_javascript_integer_precision() {
+    let (_dir, router) = ocr_router().await;
+    for (raw, expected) in [
+        ("9007199254740991", "9007199254740991"),
+        ("9007199254740993", "9007199254740992"),
+        ("-9007199254740993", "-9007199254740992"),
+        ("18446744073709551615", "18446744073709552000"),
+        ("-0", "0"),
+    ] {
+        let expected: Value = serde_json::from_str(expected).unwrap();
+        for method in ["tools/list", "tools/call", "ping", "missing"] {
+            let response = raw_mcp(&router, format!(r#"{{"jsonrpc":"2.0","id":{raw},"method":"{method}","params":{{"name":"missing","arguments":{{}}}}}}"#)).await;
+            assert_eq!(response["id"], expected, "{method}: {raw}");
+        }
+    }
+    let queued = raw_mcp(&router, r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ocr_notebook","arguments":{"identifier":"integer","pages":[1,9007199254740993]}}}"#.to_owned()).await;
+    let job_id = &queued["result"]["structuredContent"]["job_id"];
+    assert!(job_id.is_string());
+    let status = raw_mcp(&router, json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ocr_status","arguments":{"job_id":job_id}}}).to_string()).await;
+    assert_eq!(
+        status["result"]["structuredContent"]["input"]["pages"],
+        json!([1, 9_007_199_254_740_992_u64])
+    );
+}

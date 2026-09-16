@@ -70,12 +70,16 @@ async fn authenticate_mcp(
     mut request: axum::extract::Request,
     next: Next,
 ) -> Response {
-    if request.method() == axum::http::Method::POST {
-        request = match preflight(request).await {
-            Ok(request) => request,
+    let original_numeric_id = if request.method() == axum::http::Method::POST {
+        let checked = match preflight(request).await {
+            Ok(checked) => checked,
             Err(response) => return *response.0,
         };
-    }
+        request = checked.request;
+        checked.original_numeric_id
+    } else {
+        None
+    };
     let authorization = request
         .headers()
         .get(header::AUTHORIZATION)
@@ -83,10 +87,20 @@ async fn authenticate_mcp(
     match state.authenticator.authenticate(authorization) {
         Ok(auth) => {
             request.extensions_mut().insert(auth);
-            next.run(request).await
+            let response = next.run(request).await;
+            if let Some(id) = original_numeric_id {
+                restore_numeric_id(response, id).await
+            } else {
+                response
+            }
         }
         Err(error) => auth_error_response(&error),
     }
+}
+
+struct PreflightRequest {
+    request: axum::extract::Request,
+    original_numeric_id: Option<serde_json::Value>,
 }
 
 struct PreflightResponse(Box<Response>);
@@ -97,9 +111,7 @@ impl PreflightResponse {
 }
 
 // cancel-safe: reads a bounded body; no application state is mutated.
-async fn preflight(
-    request: axum::extract::Request,
-) -> Result<axum::extract::Request, PreflightResponse> {
+async fn preflight(request: axum::extract::Request) -> Result<PreflightRequest, PreflightResponse> {
     use axum::body::{Body, to_bytes};
     use serde_json::{Value, json};
     const LIMIT: usize = 1_000_000;
@@ -112,7 +124,9 @@ async fn preflight(
             "Request body too large",
         )
     })?;
-    let message: Value = serde_json::from_slice(&bytes)
+    let mut message: Value = serde_json::from_slice(&bytes)
+        .map_err(|_| rpc_error(StatusCode::BAD_REQUEST, None, -32700, "Parse error"))?;
+    normalize_json_numbers(&mut message)
         .map_err(|_| rpc_error(StatusCode::BAD_REQUEST, None, -32700, "Parse error"))?;
     let id = message.get("id");
     let method = message.get("method").and_then(Value::as_str);
@@ -182,7 +196,81 @@ async fn preflight(
         header::ACCEPT,
         HeaderValue::from_static("application/json, text/event-stream"),
     );
-    Ok(axum::extract::Request::from_parts(parts, Body::from(bytes)))
+    // rmcp only accepts i64/string IDs. The reference accepts every finite JSON
+    // number. This mapping is local to one stateless HTTP request, never a session.
+    let original_numeric_id = id
+        .filter(|id| id.is_number() && id.as_i64().is_none())
+        .cloned();
+    if let Some(id) = &original_numeric_id
+        && let Some(object) = message.as_object_mut()
+    {
+        object.insert("id".to_owned(), Value::String(format!("number:{id}")));
+    }
+    parts.headers.remove(header::CONTENT_LENGTH);
+    let body = Body::from(message.to_string());
+    Ok(PreflightRequest {
+        request: axum::extract::Request::from_parts(parts, body),
+        original_numeric_id,
+    })
+}
+
+// JSON.parse represents every number as binary64. Preserve its rounded value,
+// while retaining integer variants for rmcp and integer argument validators.
+fn normalize_json_numbers(value: &mut serde_json::Value) -> Result<(), serde_json::Error> {
+    use serde_json::Value;
+    match value {
+        Value::Number(number) => {
+            if let Some(float) = number.as_f64() {
+                let mut buffer = ryu_js::Buffer::new();
+                *number = serde_json::from_str(buffer.format(float))?;
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                normalize_json_numbers(value)?;
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                normalize_json_numbers(value)?;
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::String(_) => {}
+    }
+    Ok(())
+}
+
+// cancel-safe: only transforms the completed stateless JSON response body.
+async fn restore_numeric_id(response: Response, id: serde_json::Value) -> Response {
+    if response.status() != StatusCode::OK {
+        return response;
+    }
+    let (mut parts, body) = response.into_parts();
+    // Responses are already materialized JSON in this stateless transport. No new
+    // output-size limit is imposed on read_note results.
+    let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await else {
+        return *rpc_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Some(&id),
+            -32603,
+            "Internal server error",
+        )
+        .0;
+    };
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return *rpc_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Some(&id),
+            -32603,
+            "Internal server error",
+        )
+        .0;
+    };
+    if let Some(object) = value.as_object_mut() {
+        object.insert("id".to_owned(), id);
+    }
+    parts.headers.remove(header::CONTENT_LENGTH);
+    Response::from_parts(parts, axum::body::Body::from(value.to_string()))
 }
 
 fn rpc_error(
