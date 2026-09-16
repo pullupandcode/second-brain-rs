@@ -24,6 +24,12 @@ pub(super) fn parse_date(raw: Option<&str>) -> Result<OffsetDateTime, DispatchEr
 }
 
 fn parse_iso(raw: &str, zone: &TimeZone) -> Option<OffsetDateTime> {
+    // ECMAScript TimeClip applies after timezone conversion, including at the endpoints.
+    parse_iso_unclipped(raw, zone)
+        .filter(|date| date.unix_timestamp_nanos().abs() <= 8_640_000_000_000_000_000_000)
+}
+
+fn parse_iso_unclipped(raw: &str, zone: &TimeZone) -> Option<OffsetDateTime> {
     let fields = ISO_DATE.as_ref().ok()?.captures(raw)?;
     if fields.name("year")?.as_str() == "-000000" {
         return None;
@@ -109,8 +115,19 @@ fn parse_offset(raw: &str) -> Option<UtcOffset> {
 }
 
 fn local_to_utc(date: PrimitiveDateTime, zone: &TimeZone) -> Option<OffsetDateTime> {
+    // IANA history uses its initial offset before the first transition and its final
+    // POSIX recurrence for the distant future. Gregorian weekdays/leap years repeat
+    // every 400 years. Include its boundary years, whose UTC conversion can overflow.
+    // Resolve within jiff's range, then transfer the UTC displacement
+    // (including compatible gap/overlap handling) to the original civil year.
+    let year = match date.year() {
+        year if year >= 9999 => 8000 + year.rem_euclid(400),
+        year if year <= -9999 => -8000 + year.rem_euclid(400),
+        year => year,
+    };
+    let surrogate = date.replace_year(year).ok()?;
     let local = jiff::civil::DateTime::new(
-        i16::try_from(date.year()).ok()?,
+        i16::try_from(year).ok()?,
         i8::try_from(u8::from(date.month())).ok()?,
         i8::try_from(date.day()).ok()?,
         i8::try_from(date.hour()).ok()?,
@@ -120,7 +137,11 @@ fn local_to_utc(date: PrimitiveDateTime, zone: &TimeZone) -> Option<OffsetDateTi
     )
     .ok()?;
     let timestamp = zone.to_zoned(local).ok()?.timestamp();
-    OffsetDateTime::from_unix_timestamp_nanos(timestamp.as_nanosecond()).ok()
+    let displacement = timestamp.as_nanosecond() - surrogate.assume_utc().unix_timestamp_nanos();
+    OffsetDateTime::from_unix_timestamp_nanos(
+        date.assume_utc().unix_timestamp_nanos() + displacement,
+    )
+    .ok()
 }
 
 #[cfg(test)]
@@ -142,6 +163,136 @@ mod tests {
                 parse_iso(raw, &zone).unwrap().format(&Rfc3339).unwrap(),
                 expected,
                 "{raw}"
+            );
+        }
+    }
+    #[test]
+    fn extended_iso_years_obey_javascript_time_clip() {
+        for (raw, millis) in [
+            ("+010000-01-01T12:00:00Z", 253_402_344_000_000_i128),
+            ("-010000-01-01T12:00:00Z", -377_736_696_000_000),
+            ("+275760-09-13T00:00:00Z", 8_640_000_000_000_000),
+            ("-271821-04-20T00:00:00Z", -8_640_000_000_000_000),
+            ("+275760-09-13T01:00:00+01:00", 8_640_000_000_000_000),
+            ("-271821-04-19T23:00:00-01:00", -8_640_000_000_000_000),
+        ] {
+            assert_eq!(
+                parse_iso(raw, &TimeZone::UTC)
+                    .unwrap()
+                    .unix_timestamp_nanos()
+                    / 1_000_000,
+                millis,
+                "{raw}"
+            );
+        }
+        for raw in [
+            "+275760-09-13T00:00:00.001Z",
+            "-271821-04-19T23:59:59.999Z",
+            "+999999-01-01",
+            "-999999-01-01",
+            "-000000-01-01",
+            "10000-01-01",
+        ] {
+            assert!(parse_iso(raw, &TimeZone::UTC).is_none(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn distant_local_years_match_node_timezone_offsets_and_boundaries() {
+        // Expected Unix milliseconds recorded from the pinned Node reference.
+        for (zone, raw, millis) in [
+            (
+                "America/New_York",
+                "+010000-01-01T12:00:00",
+                253_402_362_000_000_i128,
+            ),
+            (
+                "America/New_York",
+                "+010000-07-01T12:00:00",
+                253_418_083_200_000,
+            ),
+            (
+                "America/New_York",
+                "-010000-01-01T12:00:00",
+                -377_736_678_238_000,
+            ),
+            (
+                "America/New_York",
+                "-271821-04-20T00:00:00",
+                -8_639_999_982_238_000,
+            ),
+            (
+                "Australia/Lord_Howe",
+                "+010000-01-01T12:00:00",
+                253_402_304_400_000,
+            ),
+            (
+                "Australia/Lord_Howe",
+                "+010000-07-01T12:00:00",
+                253_418_031_000_000,
+            ),
+            (
+                "Australia/Lord_Howe",
+                "-010000-01-01T12:00:00",
+                -377_736_734_180_000,
+            ),
+            (
+                "Pacific/Apia",
+                "+010000-01-01T12:00:00",
+                253_402_297_200_000,
+            ),
+            (
+                "Pacific/Apia",
+                "-010000-01-01T12:00:00",
+                -377_736_741_184_000,
+            ),
+            (
+                "America/New_York",
+                "+010000-03-12T02:30:00",
+                253_408_462_200_000,
+            ),
+            (
+                "America/New_York",
+                "+010000-11-05T01:30:00",
+                253_429_018_200_000,
+            ),
+            (
+                "America/New_York",
+                "+275760-09-12T20:00:00",
+                8_640_000_000_000_000,
+            ),
+            (
+                "America/New_York",
+                "-271821-04-19T19:03:58",
+                -8_640_000_000_000_000,
+            ),
+            (
+                "America/New_York",
+                "9999-12-31T23:59:59",
+                253_402_318_799_000,
+            ),
+            (
+                "Pacific/Apia",
+                "-009999-01-01T00:00:00",
+                -377_705_161_984_000,
+            ),
+        ] {
+            assert_eq!(
+                parse_iso(raw, &TimeZone::get(zone).unwrap())
+                    .unwrap()
+                    .unix_timestamp_nanos()
+                    / 1_000_000,
+                millis,
+                "{zone}: {raw}"
+            );
+        }
+        for (zone, raw) in [
+            ("America/New_York", "+275760-09-13T00:00:00"),
+            ("Australia/Lord_Howe", "-271821-04-20T00:00:00"),
+        ] {
+            assert!(
+                parse_iso(raw, &TimeZone::get(zone).unwrap()).is_none(),
+                "{zone}: {raw}"
             );
         }
     }

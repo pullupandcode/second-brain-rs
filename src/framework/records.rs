@@ -176,10 +176,10 @@ pub(super) fn date_string(date: OffsetDateTime) -> String {
     )
 }
 fn iso_string(date: OffsetDateTime) -> String {
-    let year = if date.year() < 0 {
-        format!("{:07}", date.year())
-    } else {
+    let year = if (0..=9999).contains(&date.year()) {
         format!("{:04}", date.year())
+    } else {
+        format!("{:+07}", date.year())
     };
     format!(
         "{year}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
@@ -297,7 +297,6 @@ mod tests {
             "2026-13-01T00:00Z",
             "2026-01-01T24:01Z",
             "2026-01-01T24:00:00.0001Z",
-            "9999-12-31T23:00-23:00",
             "2026-01-01T23:59:60Z",
             "2026-01-01T12:00+24:00",
         ] {
@@ -310,6 +309,11 @@ mod tests {
         for (raw, expected, iso) in [
             ("0001-01-02", "1-01-02", "0001-01-02T00:00:00.000Z"),
             ("-000001-01-02", "-1-01-02", "-000001-01-02T00:00:00.000Z"),
+            (
+                "+010000-01-02",
+                "10000-01-02",
+                "+010000-01-02T00:00:00.000Z",
+            ),
         ] {
             let date = parse_date(Some(raw)).unwrap();
             assert_eq!(date_string(date), expected);

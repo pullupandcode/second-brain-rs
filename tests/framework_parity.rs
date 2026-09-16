@@ -1027,6 +1027,21 @@ async fn iso_normalization_is_shared_by_records_captures_and_daily_notes() {
             json!({"title":"Inbox","content":"content","source_client":"test","date":"2026-01-01T24:00Z"}),
             "2026-01-02",
         ),
+        (
+            "create_record",
+            json!({"type":"capture","title":"Far record","body":"content","date":"-010000-01-02T00:00:00Z"}),
+            "-10000-01-02",
+        ),
+        (
+            "capture_for_date",
+            json!({"title":"Far capture","content":"content","source_client":"test","date":"+010000-01-02"}),
+            "10000-01-02",
+        ),
+        (
+            "inbox_capture",
+            json!({"title":"Clipped endpoint","content":"content","source_client":"test","date":"+275760-09-13T00:00:00Z"}),
+            "275760-09-13",
+        ),
     ] {
         let written = call(&runtime, tool, args).await;
         let note = call(&runtime, "read_note", json!({"path":written["path"]})).await;
@@ -1042,4 +1057,22 @@ async fn iso_normalization_is_shared_by_records_captures_and_daily_notes() {
     )
     .await;
     assert_eq!(daily["path"], "Calendar/Days/2026-03-02.md");
+    let ancient = call(
+        &runtime,
+        "daily_note_get",
+        json!({"date":"-010000-01-02T00:00:00Z"}),
+    )
+    .await;
+    assert_eq!(ancient["path"], "Calendar/Days/-10000-01-02.md");
+    assert!(
+        runtime
+            .dispatch(
+                "daily_note_get",
+                json!({"date":"+275760-09-13T00:00:00.001Z"})
+                    .as_object()
+                    .unwrap()
+            )
+            .await
+            .is_err()
+    );
 }

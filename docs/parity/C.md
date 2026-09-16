@@ -50,10 +50,18 @@ seconds, fractional seconds truncated to milliseconds, UTC/numeric offsets,
 24:00 rollover, and day overflow through day 31. Date-only inputs are UTC;
 timezone-less datetimes use the server's system timezone with JavaScript-compatible
 DST gap/overlap resolution. Filename/frontmatter years use the reference's
-unpadded numeric year. Compatibility limits remain: JavaScript's implementation-
-dependent legacy date strings (for example English or slash-separated dates) and
-years outside -9999 through 9999 are unsupported. Full unrestricted `Date.parse`
-compatibility is not claimed.
+unpadded numeric year. Signed extended ISO years cover JavaScript's full
+TimeClip range (inclusive ±8.64e15 milliseconds since the Unix epoch), with clipping
+after timezone conversion. For local years outside the timezone library's civil
+range, equivalent Gregorian 400-year cycles preserve IANA's initial historical
+offset and final recurring rules, including compatible DST gap/overlap handling.
+Node-derived cases cover New York, Lord Howe and Apia, distant past/future seasons,
+historical offsets with seconds, and exact clipped endpoints.
+
+The advertised argument contract in reference `src/server.ts` is ISO date/datetime.
+JavaScript's implementation-dependent legacy strings (for example English or
+slash-separated dates) remain intentionally unsupported; this is narrower than
+unrestricted `Date.parse`, while preserving the advertised ISO contract.
 
 Framework schemas, registries, templates, and note workflows enforce the shared
 effective privacy policy, including after skill reload and through canonical
@@ -81,6 +89,7 @@ symlink components, use exclusive temporary files, and publish complete content.
 | Metadata case aliases | `private/SCHEMA.yaml` overwrote an existing file under blocked `Private/**` | Canonical target/ancestor identity is checked; existing and new destinations under that folder are blocked |
 | Locale ordering | Independent HTTP QA returned `[Alpha,Zulu,alpha,beta]` instead of `[alpha,Alpha,beta,Zulu]` | ICU ordering covers mixed case and accented registry/map/structure paths; numeric zero ties preserve name ordering |
 | ISO timestamp forms | Independent QA rejected overflow timestamps, year-month and timezone-less datetimes | Shared parser accepts/normalizes these forms; local DST gap/overlap and invalid leap seconds are covered |
+| Extended ISO years | `+010000-01-01T12:00:00Z` returned no parsed date | Large-date support, final TimeClip, extended serialization and local timezone displacement pass Node-derived regression cases |
 | Existing structure test | Fixture had no schema and composition failed | Initialize schema, retain original privacy assertions, assert five record types |
 
 Additional regressions cover source-ID replacement and immediate indexing,
@@ -117,10 +126,11 @@ where those alternative spellings refer to distinct files.
 The prior 121-test gate above predates the subsequent shared-policy and QA fixes.
 The candidate now inherits shared case-insensitive denies from A `05c9741` through
 B `a1690cc`, addressing nonexistent blocked prefixes as well as existing aliases.
-After the QA fixes, focused validation passes 11 framework library tests, 20
+After the QA and extended-year fixes, focused validation passes 13 framework library tests, 20
 framework runtime tests (HTTP excluded only in the local sandbox), and strict
 Clippy. Full HTTP/dependency/repository checks remain required for the new candidate.
-The reference QA failure log is `/private/tmp/parity-qa-c/results.log`.
+The extended-year workflow test also passes for records, both capture tools and
+daily notes. The reference QA failure log is `/private/tmp/parity-qa-c/results.log`.
 
 Rebase onto the actual A/B squash commits is still required once those merges are
 permitted. Independent code review and QA must approve the final SHA; new commits

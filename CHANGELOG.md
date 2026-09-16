@@ -10,7 +10,7 @@
 - Add dated captures and source-ID replacements with audited optimistic writes and immediate index refresh.
 - Implement daily-note creation, protected-section append, and marker repair through the audited writer.
 - Populate vault structure and record-type discovery; find map/index notes using effective schema folders, with English locale ordering matching the pinned reference.
-- Normalize ISO date forms and overflow consistently across records, captures, and daily notes, including local timezone and daylight-saving resolution.
+- Normalize ISO date forms and overflow consistently across records, captures, and daily notes, including local timezone and daylight-saving resolution, signed extended years, and JavaScript date bounds.
 - Apply effective path policy to schema, registry, template, and note access; provide a copyable LYT schema.
 
 ## [0.3.0] - 2026-09-16
