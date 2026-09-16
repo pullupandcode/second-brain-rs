@@ -1,4 +1,5 @@
 //! Schema-driven records and source-id captures.
+#![allow(clippy::literal_string_with_formatting_args)] // Framework filename tokens are literals.
 use std::collections::BTreeMap;
 
 use serde_json::{Map, Value, json};
@@ -182,9 +183,13 @@ pub(super) fn parse_date(raw: Option<&str>) -> Result<OffsetDateTime, DispatchEr
             .zip(month.parse::<u8>().ok())
             .zip(day.parse::<u8>().ok())
             .and_then(|((y, m), d)| {
+                if !(1..=31).contains(&d) {
+                    return None;
+                }
                 Month::try_from(m)
                     .ok()
-                    .and_then(|m| Date::from_calendar_date(y, m, d).ok())
+                    .and_then(|m| Date::from_calendar_date(y, m, 1).ok())
+                    .and_then(|first| first.checked_add(time::Duration::days(i64::from(d) - 1)))
             });
         if let Some(date) = date {
             return Ok(date.midnight().assume_utc());
@@ -248,4 +253,38 @@ fn scheduled_date(date: OffsetDateTime, format: Option<&str>) -> String {
         format!("{hour:02}")
     };
     format!("{} {hour}:{:02} {suffix}", date_string(date), date.minute())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utc_date_and_scheduled_formats_are_consistent() {
+        let date = parse_date(Some("2026-05-07T23:30:00-03:00")).unwrap();
+        assert_eq!(date_string(date), "2026-05-08");
+        assert_eq!(
+            scheduled_date(date, Some("YYYY-MM-DD H:mm a")),
+            "2026-05-08 2:30 AM"
+        );
+        assert_eq!(scheduled_date(date, None), "2026-05-08 02:30 AM");
+        assert_eq!(
+            scheduled_date(parse_date(Some("2026-01-01")).unwrap(), None),
+            "2026-01-01 12:00 AM"
+        );
+        assert_eq!(
+            expand_pattern("{title}", " A/B:C*D?E\"F<G>H|I\\J ", date),
+            "A-B-C-D-E-F-G-H-I-J"
+        );
+    }
+
+    #[test]
+    fn iso_date_overflow_matches_javascript_date_normalization() {
+        assert_eq!(
+            date_string(parse_date(Some("2026-02-30")).unwrap()),
+            "2026-03-02"
+        );
+        assert!(parse_date(Some("2026-02-32")).is_err());
+        assert!(parse_date(Some("2026-13-01")).is_err());
+    }
 }

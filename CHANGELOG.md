@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-16
+
+- Add reference-compatible framework schemas, LYT/PARA/Zettelkasten presets, overlays, and atomic registry persistence.
+- Implement framework initialization, registration, listing, validation/reload, and live composition without restart.
+- Create schema-driven records with UTC filename tokens, templates, scheduled fields, and normalized meeting attendee links.
+- Add dated captures and source-ID replacements with audited optimistic writes and immediate index refresh.
+- Implement daily-note creation, protected-section append, and marker repair through the audited writer.
+- Populate vault structure and record-type discovery; find map/index notes using effective schema folders.
+- Apply effective path policy to schema, registry, template, and note access; provide a copyable LYT schema.
+
 ## [0.3.0] - 2026-09-16
 
 - Implement atomic create/replace, frontmatter patches and marker replacements with optimistic hashes, cooldown and per-path serialization.

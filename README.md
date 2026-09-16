@@ -1,9 +1,9 @@
 # second-brain-rs
 
 Rust port of `second-brain-mcp` v1.1.1, delivered in reviewed increments.
-**v0.3.0 adds audited note writes, deletion and recovery to the read/protocol/skills release.**
-Production JWT mode fails closed until the verifier release. Framework, capture
-and daily-note handlers are advertised but return tool errors until v0.4.0. See [the parity plan](docs/PARITY_PLAN.md).
+Version 0.4.0 implements read, write/delete, framework, capture, daily-note,
+skills, and OCR-contract tools. Production JWT mode fails closed until the
+verifier release. See [the parity plan](docs/PARITY_PLAN.md).
 
 Build with current stable Rust (minimum 1.95):
 
@@ -19,28 +19,23 @@ and use `auth.mode = "development"` only on loopback. For local testing, send
 Every protected request is authenticated independently. Request bodies are limited
 to 1,000,000 bytes; optional `mcp-method` and `mcp-name` headers must match the body.
 
-Implemented tools: `read_note`, `list_folder`, `search`, `get_backlinks`,
-`get_outgoing_links`, `list_vault_conflicts`, `link_to_page`, `get_vault_structure`
-(folder data; record types arrive in v0.4), `skills_list`, `skills_reload`, and
-three optional OCR tools. Note mutations include `create_note`, `replace_note`,
-`update_frontmatter`, `replace_section_by_marker`, `delete_note`, and
-`hard_delete_note`. Admins can inspect `list_write_recovery_diagnostics`.
-Empty folder paths select the root; empty queries list
-indexed notes. The index is rebuilt at startup and after server mutations; external file edits
-require a restart to refresh search. Writes use `base_sha256` for optimistic
-concurrency, enforce a per-path cooldown, and record audit/provenance entries.
-Soft deletion moves notes into the configured trash; hard deletion requires its
-separate `vault:delete:hard` scope.
+All 31 base tools have handlers; three optional OCR tools implement the reference
+job contract. Empty folder paths select the root; empty queries list indexed
+notes. The index is rebuilt at startup and after successful server mutations;
+external file edits require a restart to refresh search. Writes use `base_sha256`
+for optimistic concurrency, enforce a per-path cooldown, and record audit/provenance
+entries. Soft deletion moves notes into the configured trash; hard deletion requires
+its separate `vault:delete:hard` scope.
 
 | Scope | Purpose |
 |---|---|
 | `vault:read` | Notes, search, folders, links and structure |
 | `skills:read` | `prompts/list` and `prompts/get` |
-| `vault:write` | Note mutations; record workflows arrive in v0.4 |
+| `vault:write` | Note and record mutations |
 | `vault:delete` | Soft deletion |
 | `vault:delete:hard` | Permanent deletion |
-| `vault:capture` | Capture workflows (planned v0.4) |
-| `daily:append` | Daily-note append (planned v0.4) |
+| `vault:capture` | Capture workflows |
+| `daily:append` | Daily-note append |
 | `admin` | Diagnostics, skill reload, framework management, OCR |
 
 Configure `[skills] map_paths = ["Maps/Skills.md"]` to load linked notes with
@@ -55,7 +50,7 @@ distinguish them. Ordinary path identity, search identity and soft ignored-glob
 matching retain their original case-sensitive behavior. Admin diagnostics omit
 skill bodies; prompts require the separate `skills:read` scope. Reload replaces
 skills and the shared privacy policy without restart. Previously private notes
-remain absent from the startup index until restart even after being unloaded.
+remain absent from the index until a rebuild after being unloaded.
 
 `[ocr] enabled = true` adds `ocr_notebook`, `ocr_status`, and
 `ocr_renumber_notebook` (31 base tools, 34 with OCR). Jobs receive UUIDs and UTC
@@ -66,3 +61,43 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for validation and
 [docs/parity/A.md](docs/parity/A.md) and [docs/parity/B.md](docs/parity/B.md)
 for reference mappings and intentional
 security/compatibility improvements.
+
+Framework reference mappings and test evidence are recorded in
+[scope C](docs/parity/C.md).
+
+## Framework schemas and records
+
+Initialize a starter schema using `framework_init` with `framework: lyt`, `para`,
+or `zettel`. Creation is exclusive; `mode: overwrite` explicitly replaces an
+existing schema. The default path is `_meta/framework.yaml`, configurable through
+`[framework].schema_path`.
+
+For a richer LYT starting point, copy
+[examples/vault/_meta/framework.lyt.yaml](examples/vault/_meta/framework.lyt.yaml)
+to your vault as `_meta/framework.yaml`. Customize its folders, filename patterns,
+and template paths. Record templates that do not exist are treated as empty.
+
+Register overlays with `framework_register` (`name`, `path`, optional integer
+`priority`, default 100). Registrations persist in `_meta/schemas.json` and compose
+in priority/name order. `framework_reload` reports per-overlay validation;
+`framework_compose` computes the effective schema. Types may only replace an
+existing definition when the overlay declares `override: true`; overlays cannot
+change the base `inbox.folder`.
+
+`create_record` expands schema filename tokens and merges optional `fields` with
+record metadata. `capture_for_date` and `inbox_capture` create capture records;
+`inbox_capture` with `strategy: replace_by_source_id` replaces the indexed source
+note using its current hash. Captures do not modify daily notes.
+
+`daily_note_get` reads or creates `Calendar/Days/YYYY-MM-DD.md` from
+`x/Templates/Daily Template.md`. `daily_note_append` requires `base_sha256` and
+appends to `daily-log` by default, or the named writable `last-light` section.
+`agenda` is protected. Administrators can restore missing template marker blocks
+with `daily_note_repair_markers`.
+
+Schema/registry metadata uses atomic publication and effective path policy, with
+no note cooldown. A schema output path ending in `.md` uses the audited note
+writer and its cooldown policy. All note mutations use audited, hash-checked storage operations.
+The reference schema subset exposes frontmatter defaults and field declarations;
+record creation only synthesizes `scheduled` and normalizes meeting attendees.
+It does not enforce required fields or apply schema defaults automatically.

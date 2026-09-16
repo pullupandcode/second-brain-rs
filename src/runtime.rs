@@ -9,6 +9,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     config::ServerConfig,
+    framework::Framework,
     skills::{LoadedSkill, SkillLoad, load_skills},
     vault::{
         audit::{VaultWriteAuditStore, rotate_write_audit_if_needed},
@@ -82,6 +83,8 @@ pub struct Runtime {
     ocr: crate::ocr::OcrQueue,
     writer: Arc<VaultWriter>,
     audit: Arc<VaultWriteAuditStore>,
+    framework: Framework,
+    framework_mutation_lock: tokio::sync::Mutex<()>,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -150,6 +153,13 @@ impl Runtime {
             },
             Some(Arc::clone(&audit)),
         ));
+        let framework = Framework::new(
+            PathBuf::from(&config.vault_path),
+            config.framework.schema_path.clone(),
+            reader.clone(),
+            Arc::clone(&writer),
+            Arc::clone(&index),
+        );
         let runtime = Arc::new(Self {
             config,
             reader,
@@ -161,6 +171,8 @@ impl Runtime {
             ocr: crate::ocr::OcrQueue::default(),
             writer,
             audit,
+            framework,
+            framework_mutation_lock: tokio::sync::Mutex::new(()),
         });
         runtime.cold_rebuild().await?;
         Ok(runtime)
@@ -245,6 +257,20 @@ impl Runtime {
             "ocr_notebook" | "ocr_status" | "ocr_renumber_notebook" if self.config.ocr.enabled => {
                 self.ocr.dispatch(name, args)
             }
+            "framework_init"
+            | "framework_register"
+            | "framework_unregister"
+            | "framework_list"
+            | "framework_reload"
+            | "framework_compose"
+            | "list_record_types"
+            | "find_maps"
+            | "create_record"
+            | "inbox_capture"
+            | "capture_for_date"
+            | "daily_note_get"
+            | "daily_note_append"
+            | "daily_note_repair_markers" => self.framework_tool(name, args).await,
             "create_note"
             | "replace_note"
             | "update_frontmatter"
@@ -268,10 +294,36 @@ impl Runtime {
             "list_vault_conflicts" => self.list_vault_conflicts().await,
             "link_to_page" => self.link_to_page(args).await,
             "get_vault_structure" => self.get_vault_structure().await,
-            // Write / framework / capture / daily / OCR tools arrive in later phases.
-            _ if is_known_later_tool(name) => Err(DispatchError::NotImplemented),
             other => Err(DispatchError::UnknownTool(other.to_owned())),
         }
+    }
+
+    // NOT cancel-safe: serialize framework note mutations through index refresh.
+    async fn framework_tool(
+        &self,
+        name: &str,
+        args: &Map<String, Value>,
+    ) -> Result<Value, DispatchError> {
+        let mutating = matches!(
+            name,
+            "framework_init"
+                | "create_record"
+                | "inbox_capture"
+                | "capture_for_date"
+                | "daily_note_get"
+                | "daily_note_append"
+                | "daily_note_repair_markers"
+        );
+        let _guard = if mutating {
+            Some(self.framework_mutation_lock.lock().await)
+        } else {
+            None
+        };
+        let result = self.framework.dispatch(name, args).await?;
+        if mutating && let Err(error) = self.cold_rebuild().await {
+            tracing::error!(%error,"index refresh after framework write failed");
+        }
+        Ok(result)
     }
 
     async fn write_tool(
@@ -450,8 +502,7 @@ impl Runtime {
             .await
             .map_err(|error| self.reader_error(&error))?;
         let folders = to_value(&entries)?;
-        // Record types arrive with the framework schema in Phase 3.
-        Ok(json!({ "folders": folders, "recordTypes": [] }))
+        Ok(json!({ "folders": folders, "recordTypes": self.framework.record_types().await? }))
     }
 
     fn reader_error(&self, error: &crate::vault::reader::VaultReaderError) -> DispatchError {
@@ -534,36 +585,6 @@ async fn scan_conflicts(
         }
     }
     Ok(pairs)
-}
-
-fn is_known_later_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "create_note"
-            | "delete_note"
-            | "hard_delete_note"
-            | "replace_note"
-            | "update_frontmatter"
-            | "replace_section_by_marker"
-            | "create_record"
-            | "inbox_capture"
-            | "capture_for_date"
-            | "daily_note_get"
-            | "daily_note_append"
-            | "daily_note_repair_markers"
-            | "list_record_types"
-            | "find_maps"
-            | "list_write_recovery_diagnostics"
-            | "framework_init"
-            | "framework_reload"
-            | "framework_register"
-            | "framework_unregister"
-            | "framework_list"
-            | "framework_compose"
-            | "ocr_notebook"
-            | "ocr_status"
-            | "ocr_renumber_notebook"
-    )
 }
 
 fn to_value<T: serde::Serialize>(value: &T) -> Result<Value, DispatchError> {

@@ -89,10 +89,10 @@ impl Framework {
                     if note.content.contains(&start) && note.content.contains(&end) {
                         continue;
                     }
-                    if let Some((from, to)) = marker_range(&template, marker) {
-                        if let Some(block) = template.get(from - start.len()..to + end.len()) {
-                            missing.push(block);
-                        }
+                    if let Some((from, to)) = marker_range(&template, marker)
+                        && let Some(block) = template.get(from - start.len()..to + end.len())
+                    {
+                        missing.push(block);
                     }
                 }
                 if missing.is_empty() {

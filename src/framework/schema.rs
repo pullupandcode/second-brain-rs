@@ -1,5 +1,7 @@
 //! Reference-compatible framework schema parser and composer.
 
+use std::fmt::Write;
+
 use serde_json::{Map, Value, json};
 
 pub(super) fn parse_schema(source: &str) -> Result<Value, String> {
@@ -67,6 +69,11 @@ pub(super) fn parse_schema(source: &str) -> Result<Value, String> {
         copy_strings(inbox, &mut normalized, &["folder"], "inbox.")?;
         result.insert("inbox".into(), normalized.into());
     }
+    result.insert("types".into(), parse_types(&raw)?.into());
+    Ok(result.into())
+}
+
+fn parse_types(raw: &Map<String, Value>) -> Result<Map<String, Value>, String> {
     let raw_types = raw
         .get("types")
         .and_then(Value::as_object)
@@ -110,8 +117,7 @@ pub(super) fn parse_schema(source: &str) -> Result<Value, String> {
         }
         types.insert(name.clone(), definition.into());
     }
-    result.insert("types".into(), types.into());
-    Ok(result.into())
+    Ok(types)
 }
 
 fn copy_strings(
@@ -203,10 +209,9 @@ fn parse_scalar(raw: &str) -> Value {
 }
 
 pub(super) fn compose_schema(base: Value, overlays: Vec<Value>) -> Result<Value, String> {
-    let mut base = base
-        .as_object()
-        .cloned()
-        .ok_or("base schema must be an object")?;
+    let Value::Object(mut base) = base else {
+        return Err("base schema must be an object".into());
+    };
     if base.get("schemaKind").and_then(Value::as_str) != Some("base") {
         return Err("base schema must have schema_kind: base".into());
     }
@@ -331,18 +336,21 @@ pub(super) fn materialize_preset(id: &str) -> Result<String, String> {
     if let Some(types) = preset.get("types").and_then(Value::as_array) {
         for definition in types {
             let text = |k| definition.get(k).and_then(Value::as_str).unwrap_or("");
-            source.push_str(&format!(
+            write!(
+                source,
                 "  {}:\n    description: \"{}\"\n    folder: {}\n    filename: \"{{title}}.md\"\n",
                 text("name"),
                 text("description"),
                 text("defaultFolder")
-            ));
+            )
+            .map_err(|error| error.to_string())?;
         }
     }
     Ok(source)
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use serde_json::json;
 

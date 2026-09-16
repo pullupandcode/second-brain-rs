@@ -39,7 +39,7 @@ impl VaultWriteError {
     pub fn current_sha256(&self) -> Option<&str> {
         self.current_sha256.as_deref()
     }
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),

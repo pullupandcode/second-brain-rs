@@ -1,11 +1,30 @@
 //! Framework workflows exercised through the production runtime.
-#![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::literal_string_with_formatting_args
+)]
 use std::sync::Arc;
 
 use second_brain_rs::{config::parse_config, runtime::Runtime};
 use serde_json::{Value, json};
 
 async fn fixture() -> (tempfile::TempDir, Arc<Runtime>) {
+    fixture_with_cooldown(0).await
+}
+
+async fn fixture_with_cooldown(cooldown: u64) -> (tempfile::TempDir, Arc<Runtime>) {
+    let (dir, runtime, _) = fixture_config(cooldown).await;
+    (dir, runtime)
+}
+
+async fn fixture_config(
+    cooldown: u64,
+) -> (
+    tempfile::TempDir,
+    Arc<Runtime>,
+    Arc<second_brain_rs::config::ServerConfig>,
+) {
     let dir = tempfile::tempdir().unwrap();
     let vault = dir.path().join("vault");
     tokio::fs::create_dir_all(vault.join("x/Templates"))
@@ -28,7 +47,7 @@ sqlite_path = ":memory:"
 watcher_polling = false
 ignored_globs = []
 [writes]
-cooldown_seconds = 0
+cooldown_seconds = {cooldown}
 [daily_note]
 capture_default_pattern = "B"
 [logging]
@@ -39,10 +58,9 @@ blocked_paths = ["Private/**"]
         vault.display(),
         dir.path().join("state").display()
     );
-    let runtime = Runtime::create(Arc::new(parse_config(&config).unwrap()))
-        .await
-        .unwrap();
-    (dir, runtime)
+    let config = Arc::new(parse_config(&config).unwrap());
+    let runtime = Runtime::create(Arc::clone(&config)).await.unwrap();
+    (dir, runtime, config)
 }
 
 async fn call(runtime: &Runtime, name: &str, args: Value) -> Value {
@@ -397,4 +415,241 @@ async fn invalid_framework_arguments_reject_without_mutating_files() {
         );
     }
     assert!(!dir.path().join("vault/_meta/schemas.json").exists());
+}
+
+#[tokio::test]
+async fn metadata_does_not_inherit_note_cooldown_and_registry_updates_do_not_get_lost() {
+    let (_dir, runtime) = fixture_with_cooldown(60).await;
+    call(&runtime, "framework_init", json!({"framework":"lyt"})).await;
+    call(
+        &runtime,
+        "framework_init",
+        json!({"framework":"para","mode":"overwrite"}),
+    )
+    .await;
+    let mut tasks = Vec::new();
+    for i in 0..12 {
+        let runtime = Arc::clone(&runtime);
+        tasks.push(tokio::spawn(async move {
+            call(&runtime,"framework_register",json!({"name":format!("overlay-{i:02}"),"path":format!("_meta/{i}.yaml"),"priority":i%3})).await
+        }));
+    }
+    for task in tasks {
+        task.await.unwrap();
+    }
+    let entries = call(&runtime, "framework_list", json!({})).await;
+    assert_eq!(entries.as_array().unwrap().len(), 12);
+    assert_eq!(entries[0]["name"], "overlay-00");
+    assert_eq!(entries[1]["name"], "overlay-03");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn schema_registry_and_templates_cannot_escape_via_symlinks() {
+    let (dir, runtime) = fixture().await;
+    let outside = tempfile::tempdir().unwrap();
+    tokio::fs::symlink(outside.path(), dir.path().join("vault/escape"))
+        .await
+        .unwrap();
+    let error = runtime
+        .dispatch(
+            "framework_init",
+            json!({"framework":"lyt","output_path":"escape/schema.yaml"})
+                .as_object()
+                .unwrap(),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("outside") || error.to_string().contains("symlink"));
+    assert!(!outside.path().join("schema.yaml").exists());
+    call(&runtime, "framework_init", json!({"framework":"lyt"})).await;
+    tokio::fs::write(outside.path().join("secret.json"), "{\"overlays\":[]}")
+        .await
+        .unwrap();
+    tokio::fs::symlink(
+        outside.path().join("secret.json"),
+        dir.path().join("vault/_meta/schemas.json"),
+    )
+    .await
+    .unwrap();
+    assert!(
+        runtime
+            .dispatch(
+                "framework_register",
+                json!({"name":"bad","path":"x.yaml"}).as_object().unwrap()
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        tokio::fs::read_to_string(outside.path().join("secret.json"))
+            .await
+            .unwrap(),
+        "{\"overlays\":[]}"
+    );
+}
+
+async fn http_rpc(base: &str, scope: &str, method: &str, params: Value) -> Value {
+    let response = reqwest::Client::new()
+        .post(format!("{base}/mcp"))
+        .header("authorization", format!("Bearer scope={scope}"))
+        .header("accept", "application/json, text/event-stream")
+        .json(&json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let text = response.text().await.unwrap();
+    assert!(status.is_success(), "{status}: {text}");
+    if let Ok(value) = serde_json::from_str(&text) {
+        return value;
+    }
+    text.lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .find_map(|data| serde_json::from_str(data).ok())
+        .unwrap()
+}
+
+async fn http_tool(base: &str, scope: &str, name: &str, args: Value) -> Value {
+    let rpc = http_rpc(
+        base,
+        scope,
+        "tools/call",
+        json!({"name":name,"arguments":args}),
+    )
+    .await;
+    assert!(rpc.get("error").is_none(), "{rpc}");
+    assert_ne!(rpc["result"]["isError"], true, "{rpc}");
+    rpc["result"]["structuredContent"].clone()
+}
+
+#[tokio::test]
+async fn http_framework_overlay_capture_daily_and_scope_acceptance() {
+    use second_brain_rs::{
+        auth::dev::DevAuthenticator,
+        http::{AppState, build_router},
+        mcp::SecondBrainHandler,
+    };
+    let (dir, runtime, config) = fixture_config(0).await;
+    let handler = SecondBrainHandler::new(&config, runtime);
+    let app = build_router(AppState {
+        config,
+        authenticator: Arc::new(DevAuthenticator::new(std::collections::HashSet::new())),
+        handler,
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    http_tool(&base, "admin", "framework_init", json!({"framework":"lyt"})).await;
+    tokio::fs::write(
+        dir.path().join("vault/_meta/work.yaml"),
+        "version: 1\nschema_kind: overlay\ntypes:\n  decision:\n    folder: Decisions\n",
+    )
+    .await
+    .unwrap();
+    http_tool(
+        &base,
+        "admin",
+        "framework_register",
+        json!({"name":"work","path":"_meta/work.yaml"}),
+    )
+    .await;
+    assert_eq!(
+        http_tool(&base, "admin", "framework_reload", json!({})).await["ok"],
+        true
+    );
+    assert_eq!(
+        http_tool(&base, "admin", "framework_compose", json!({})).await["types"]["decision"]["folder"],
+        "Decisions"
+    );
+    assert_eq!(
+        http_tool(&base, "vault:read", "list_record_types", json!({})).await["recordTypes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        6
+    );
+    let capture = json!({"content":"original","date":"2026-05-07","source_client":"http","source_id":"same","strategy":"replace_by_source_id","title":"HTTP"});
+    let first = http_tool(&base, "vault:capture", "inbox_capture", capture).await;
+    let second=http_tool(&base,"vault:capture","inbox_capture",json!({"content":"replacement","date":"2026-05-08","source_client":"http","source_id":"same","strategy":"replace_by_source_id"})).await;
+    assert_eq!(first["path"], second["path"]);
+    assert_eq!(first["resultSha256"], second["baseSha256"]);
+    let daily = http_tool(
+        &base,
+        "vault:read",
+        "daily_note_get",
+        json!({"date":"2026-05-07"}),
+    )
+    .await;
+    let appended=http_tool(&base,"daily:append","daily_note_append",json!({"date":"2026-05-07","content":"- HTTP capture","base_sha256":daily["currentSha256"]})).await;
+    assert!(
+        appended["content"]
+            .as_str()
+            .unwrap()
+            .contains("- HTTP capture")
+    );
+    let denied = http_rpc(
+        &base,
+        "vault:read",
+        "tools/call",
+        json!({"name":"create_record","arguments":{"type":"decision","title":"Denied"}}),
+    )
+    .await;
+    assert!(denied.get("error").is_some(), "{denied}");
+    let denied = http_rpc(
+        &base,
+        "vault:capture",
+        "tools/call",
+        json!({"name":"framework_init","arguments":{"framework":"para"}}),
+    )
+    .await;
+    assert!(denied.get("error").is_some(), "{denied}");
+    let created = http_tool(
+        &base,
+        "vault:write",
+        "create_record",
+        json!({"type":"decision","title":"HTTP decision","body":"Approved"}),
+    )
+    .await;
+    assert_eq!(created["path"], "Decisions/HTTP decision.md");
+    server.abort();
+}
+
+#[tokio::test]
+async fn markdown_framework_output_uses_audited_note_guards() {
+    let (dir, runtime) = fixture_with_cooldown(60).await;
+    call(
+        &runtime,
+        "framework_init",
+        json!({"framework":"lyt","output_path":"Notes/schema.md"}),
+    )
+    .await;
+    let audit_path = dir.path().join("state/write-audit.sqlite");
+    let writes = tokio::task::spawn_blocking(move || {
+        second_brain_rs::vault::audit::VaultWriteAuditStore::open(&audit_path)
+            .unwrap()
+            .list_recent_writes(None)
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    assert_eq!(writes.len(), 1);
+    let error = runtime
+        .dispatch(
+            "framework_init",
+            json!({"framework":"para","output_path":"Notes/schema.md","mode":"overwrite"})
+                .as_object()
+                .unwrap(),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("cooldown"));
+    assert!(
+        tokio::fs::read_to_string(dir.path().join("vault/Notes/schema.md"))
+            .await
+            .unwrap()
+            .contains("framework: lyt")
+    );
 }

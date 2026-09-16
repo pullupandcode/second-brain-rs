@@ -1,6 +1,7 @@
 //! Framework schema composition and vault workflows.
 
 mod daily;
+mod metadata;
 mod records;
 mod schema;
 
@@ -143,7 +144,7 @@ impl Framework {
         Ok(json!({"ok":ok,"overlays":statuses}))
     }
 
-    // NOT cancel-safe: completes an audited file mutation.
+    // NOT cancel-safe: publishes an atomic metadata file.
     async fn init(&self, args: &Map<String, Value>) -> Result<Value, DispatchError> {
         let framework = string(args, "framework")?;
         let source = schema::materialize_preset(framework).map_err(invalid)?;
@@ -152,28 +153,14 @@ impl Framework {
         if !matches!(mode, "create" | "overwrite") {
             return Err(invalid("mode must be create or overwrite"));
         }
-        let existing = if mode == "overwrite" {
-            self.read_optional_text(path).await?
-        } else {
-            None
-        };
-        if let Some(existing) = &existing {
-            self.writer
-                .replace_note(path, &source, &hash(existing), None)
-                .await
-                .map_err(write_error)?;
-        } else {
-            self.writer
-                .create_note(path, &source, None)
-                .await
-                .map_err(write_error)?;
-        }
-        Ok(
-            json!({"path":path,"framework":framework,"created":existing.is_none(),"overwritten":existing.is_some()}),
-        )
+        let _guard = self.registry_lock.lock().await;
+        let existed = self
+            .write_metadata(path, &source, mode == "overwrite")
+            .await?;
+        Ok(json!({"path":path,"framework":framework,"created":!existed,"overwritten":existed}))
     }
 
-    // NOT cancel-safe: serializes and writes the registry through the audited writer.
+    // NOT cancel-safe: serializes and atomically publishes the registry.
     async fn register(&self, args: &Map<String, Value>) -> Result<Value, DispatchError> {
         let name = string(args, "name")?;
         let path = self.check_path(string(args, "path")?)?;
@@ -204,7 +191,7 @@ impl Framework {
         ))
     }
 
-    // NOT cancel-safe: serializes and writes the registry through the audited writer.
+    // NOT cancel-safe: serializes and atomically publishes the registry.
     async fn unregister(&self, args: &Map<String, Value>) -> Result<Value, DispatchError> {
         let name = string(args, "name")?;
         let _guard = self.registry_lock.lock().await;
@@ -249,7 +236,7 @@ impl Framework {
         Ok(entries)
     }
 
-    // NOT cancel-safe: writer owns audit and filesystem lifecycle.
+    // NOT cancel-safe: publishes an atomic registry file.
     async fn save_registrations(
         &self,
         entries: &[Map<String, Value>],
@@ -260,17 +247,7 @@ impl Framework {
             serde_json::to_string_pretty(&json!({"overlays":entries}))
                 .map_err(|e| invalid(e.to_string()))?
         );
-        if let Some(current) = self.read_optional_text(path).await? {
-            self.writer
-                .replace_note(path, &source, &hash(&current), None)
-                .await
-                .map_err(write_error)?;
-        } else {
-            self.writer
-                .create_note(path, &source, None)
-                .await
-                .map_err(write_error)?;
-        }
+        self.write_metadata(path, &source, true).await?;
         Ok(())
     }
 
@@ -377,18 +354,15 @@ fn sort_registrations(entries: &mut [Map<String, Value>]) {
 fn invalid(message: impl Into<String>) -> DispatchError {
     DispatchError::Invalid(message.into())
 }
-fn write_error(error: VaultWriteError) -> DispatchError {
+const fn write_error(error: VaultWriteError) -> DispatchError {
     DispatchError::Write(error)
 }
+#[allow(clippy::needless_pass_by_value)] // Result::map_err consumes the reader error.
 fn read_error(error: VaultReaderError) -> DispatchError {
     invalid(error.to_string())
 }
 fn is_missing(error: &VaultReaderError) -> bool {
     matches!(error,VaultReaderError::Io(e) | VaultReaderError::Path(VaultPathError::Io(e)) if e.kind()==std::io::ErrorKind::NotFound)
-}
-fn hash(content: &str) -> String {
-    use sha2::{Digest, Sha256};
-    hex::encode(Sha256::digest(content.as_bytes()))
 }
 fn string<'a>(args: &'a Map<String, Value>, name: &str) -> Result<&'a str, DispatchError> {
     args.get(name)
@@ -433,7 +407,7 @@ fn frontmatter(value: Option<&Value>) -> Result<BTreeMap<String, FrontmatterValu
                         })
                         .collect::<Result<_, _>>()?,
                 ),
-                _ => {
+                Value::Null | Value::Object(_) => {
                     return Err(invalid(
                         "fields must contain string, number, boolean, or string[]",
                     ));
