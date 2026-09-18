@@ -65,16 +65,23 @@ pub const KNOWN_SCOPES: [Scope; 8] = [
     Scope::Admin,
 ];
 
-/// Parse a whitespace-separated scope claim, dropping unknown tokens.
+/// Parse an ECMAScript-whitespace-separated scope claim, dropping unknown tokens.
 #[must_use]
 pub fn parse_scopes(claim: &str) -> HashSet<Scope> {
     claim
-        .split_whitespace()
+        .split(|c| {
+            matches!(c,
+                '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' |
+                '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' |
+                '\u{205f}' | '\u{3000}' | '\u{feff}'
+            )
+        })
         .filter_map(Scope::from_wire)
         .collect()
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -92,6 +99,28 @@ mod tests {
         assert!(parse_scopes("   ").is_empty());
     }
 
+    #[test]
+    fn scope_separators_match_ecmascript_whitespace_exactly() {
+        for scalar in [
+            0x9, 0xa, 0xb, 0xc, 0xd, 0x20, 0xa0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004,
+            0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000,
+            0xfeff,
+        ] {
+            let separator = char::from_u32(scalar).unwrap();
+            assert_eq!(
+                parse_scopes(&format!("{separator}vault:read{separator}admin{separator}")),
+                HashSet::from([Scope::VaultRead, Scope::Admin]),
+                "U+{scalar:04X}"
+            );
+        }
+        for scalar in [0x8, 0xe, 0x1c, 0x85, 0x180e, 0x200b, 0x202a, 0x2060, 0xfe00] {
+            let separator = char::from_u32(scalar).unwrap();
+            assert!(
+                parse_scopes(&format!("vault:read{separator}admin")).is_empty(),
+                "U+{scalar:04X}"
+            );
+        }
+    }
     #[test]
     fn roundtrip_wire_strings() {
         for scope in KNOWN_SCOPES {

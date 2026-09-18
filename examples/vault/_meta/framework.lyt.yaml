@@ -1,0 +1,70 @@
+# Copy this file into your vault as _meta/framework.yaml, or point
+# [framework].schema_path at this vault-relative path.
+#
+# This is a starter Linking Your Thinking / Ideaverse-style schema. It is
+# intentionally plain YAML so you can rename folders, adjust filenames, and
+# add or remove record types without changing the MCP server.
+
+version: 1
+schema_kind: base
+framework: lyt
+name: lyt-starter
+description: "Linking Your Thinking starter schema"
+
+inbox:
+  folder: +
+
+types:
+  meeting:
+    description: "A time-based meeting record."
+    folder: Calendar/Records/Meetings
+    filename: "{date:YYYY-MM-DD} {title}.md"
+    template: Templates/Meeting.md
+    frontmatter:
+      collection: ["[[Meetings]]"]
+      record_type: meeting
+      scheduled: { required: false, format: "YYYY-MM-DD hh:mm a" }
+      attendees: { required: false, type: linklist }
+
+  capture:
+    description: "An agent, inbox, or date-based capture record."
+    folder: Calendar/Records/Captures
+    filename: "{date:YYYY-MM-DD} {title}.md"
+    template: Templates/Capture.md
+    frontmatter:
+      collection: ["[[Captures]]"]
+      record_type: capture
+      source_client: { required: false }
+      source_id: { required: false }
+      capture_type: { required: false }
+
+  person:
+    description: "A person, collaborator, contact, or relationship note."
+    folder: Atlas/Dots/People
+    filename: "{title}.md"
+    template: Templates/Person.md
+    frontmatter:
+      collection: ["[[People]]"]
+      record_type: person
+      aliases: { required: false, type: list }
+
+  project:
+    description: "An active effort or project."
+    folder: Efforts/Projects/Active
+    filename: "{title}.md"
+    template: Templates/Project.md
+    frontmatter:
+      collection: ["[[Projects]]"]
+      record_type: project
+      status: active
+      owner: { required: false }
+
+  map:
+    description: "A map of content, collection hub, or index note."
+    folder: Atlas/Maps
+    filename: "{title}.md"
+    template: Templates/Map.md
+    frontmatter:
+      collection: ["[[Maps]]"]
+      record_type: map
+      topic: { required: false }

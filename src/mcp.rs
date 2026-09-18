@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     auth::{AuthContext, scopes::Scope},
     config::ServerConfig,
-    observability::{OperationalLogEntry, ToolCallResult, log_operational},
+    observability::{OperationalLogEntry, ToolCallResult, log_operational, redact_arguments},
     runtime::{DispatchError, Runtime},
     tools::registry::{
         ToolDefinition, create_tool_registry, input_schema_for_tool, list_tools_for_scopes,
@@ -31,6 +31,7 @@ pub struct SecondBrainHandler {
 }
 
 struct HandlerState {
+    log_args: bool,
     tools: Vec<ToolDefinition>,
     runtime: Arc<Runtime>,
 }
@@ -48,6 +49,7 @@ impl SecondBrainHandler {
         Self {
             inner: Arc::new(HandlerState {
                 tools: create_tool_registry(config.ocr.enabled),
+                log_args: config.logging.log_args,
                 runtime,
             }),
         }
@@ -238,10 +240,17 @@ impl ServerHandler for SecondBrainHandler {
                     )),
                     ToolCallResult::Error,
                 ),
-                Err(DispatchError::Internal(message)) => (
+                Err(DispatchError::Write(error)) => (
+                    Err(ErrorData::invalid_params(
+                        error.to_string(),
+                        serde_json::to_value(&error).ok(),
+                    )),
+                    ToolCallResult::Error,
+                ),
+                Err(DispatchError::Internal(_message)) => (
                     Err(ErrorData::internal_error(
                         {
-                            tracing::error!(%message, "tool failed");
+                            tracing::error!("tool failed");
                             "Internal tool error"
                         },
                         None,
@@ -257,6 +266,10 @@ impl ServerHandler for SecondBrainHandler {
             client_id,
             tool: name,
             args_hash: hash_args(&args),
+            args: self
+                .inner
+                .log_args
+                .then(|| redact_arguments(&Value::Object(args.clone()))),
             result: outcome,
             duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         });
@@ -329,6 +342,9 @@ mod tests {
     fn ctx(scopes: &[Scope]) -> AuthContext {
         AuthContext {
             subject: "t".to_owned(),
+            issuer: "test".to_owned(),
+            audience: "test".to_owned(),
+            token_id: None,
             scopes: scopes.iter().copied().collect(),
             client_id: None,
         }

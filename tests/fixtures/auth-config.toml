@@ -1,0 +1,21 @@
+
+listen = "127.0.0.1:0"
+public_base_url = "http://127.0.0.1:3000"
+vault_path = "/tmp/vault"
+state_path = "/tmp/state"
+[auth]
+mode = "jwt"
+audience = "second-brain-rs"
+trusted_issuers = ["https://idp.example.com/o/sb/"]
+discovery_authorization_server = "https://idp.example.com/o/sb/"
+jwks_cache_ttl_seconds = 3600
+jwt_algorithms = ["RS256", "ES256"]
+[index]
+watcher_polling = false
+ignored_globs = []
+[writes]
+cooldown_seconds = 0
+[daily_note]
+capture_default_pattern = "B"
+[logging]
+log_args = false

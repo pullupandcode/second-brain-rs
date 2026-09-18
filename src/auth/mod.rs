@@ -2,9 +2,10 @@
 
 pub mod dev;
 pub mod discovery;
+pub mod jwt;
 pub mod scopes;
 
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, future::Future, pin::Pin, sync::Arc};
 
 use crate::{
     auth::{dev::DevAuthenticator, scopes::Scope},
@@ -13,19 +14,25 @@ use crate::{
 
 /// Build the authenticator selected by `config.auth.mode`.
 ///
-/// JWT mode fails closed until the production verifier is available.
+/// JWT mode fails closed if the verification client cannot initialize.
 #[must_use]
 pub fn build_authenticator(config: &ServerConfig) -> Arc<dyn Authenticator> {
     match config.auth.mode {
-        AuthMode::Development => Arc::new(DevAuthenticator::new(
-            config
-                .auth
-                .development_default_scopes
-                .iter()
-                .copied()
-                .collect(),
-        )),
-        AuthMode::Jwt => Arc::new(UnavailableJwt),
+        AuthMode::Development => Arc::new(
+            DevAuthenticator::new(
+                config
+                    .auth
+                    .development_default_scopes
+                    .iter()
+                    .copied()
+                    .collect(),
+            )
+            .with_audience(&config.auth.audience),
+        ),
+        AuthMode::Jwt => match jwt::JwtAuthenticator::new(&config.auth) {
+            Ok(auth) => Arc::new(auth),
+            Err(_) => Arc::new(UnavailableAuthenticator),
+        },
     }
 }
 
@@ -33,6 +40,12 @@ pub fn build_authenticator(config: &ServerConfig) -> Arc<dyn Authenticator> {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct AuthContext {
+    /// Validated issuer identifier.
+    pub issuer: String,
+    /// Expected token audience.
+    pub audience: String,
+    /// Optional token identifier.
+    pub token_id: Option<String>,
     /// Canonical subject identity.
     pub subject: String,
     /// Granted scopes.
@@ -101,15 +114,17 @@ pub trait Authenticator: Send + Sync {
     ///
     /// # Errors
     /// Returns [`AuthError`] when the token is missing or invalid.
-    fn authenticate(&self, authorization: Option<&str>) -> Result<AuthContext, AuthError>;
+    fn authenticate<'a>(&'a self, authorization: Option<&'a str>) -> AuthFuture<'a>;
 }
 
-#[derive(Debug)]
-struct UnavailableJwt;
-impl Authenticator for UnavailableJwt {
-    fn authenticate(&self, _authorization: Option<&str>) -> Result<AuthContext, AuthError> {
-        Err(AuthError::invalid(
-            "JWT authentication is unavailable in this release",
-        ))
+/// Boxed asynchronous authentication result for object-safe dispatch.
+pub type AuthFuture<'a> = Pin<Box<dyn Future<Output = Result<AuthContext, AuthError>> + Send + 'a>>;
+
+struct UnavailableAuthenticator;
+impl Authenticator for UnavailableAuthenticator {
+    fn authenticate<'a>(&'a self, _authorization: Option<&'a str>) -> AuthFuture<'a> {
+        Box::pin(std::future::ready(Err(AuthError::invalid(
+            "Invalid bearer token",
+        ))))
     }
 }

@@ -1,25 +1,27 @@
-# Example configuration for second-brain-rs.
-#
-# Copy to a machine-local path (e.g. config.local.toml) and edit listen,
-# public_base_url, vault_path, state_path, and the [auth] settings.
-
-listen = "127.0.0.1:3000"           # host:port to bind
-public_base_url = "http://127.0.0.1:3000"
+# second-brain-rs configuration. Copy to config.local.toml and edit paths/issuer.
+# Use an existing vault and keep runtime state outside synchronized vault contents.
+listen = "127.0.0.1:3000"
+public_base_url = "http://127.0.0.1:3000" # externally reachable HTTPS URL behind a proxy
 vault_path = "/path/to/vault"
 state_path = "/path/to/state"
 
 [auth]
-mode = "jwt"                          # fails closed in v0.2; production verifier planned in v0.5
+mode = "jwt" # verifies signatures; "development" is only for isolated local use
+# Access-token audience and exact issuer strings, including trailing slashes.
 audience = "second-brain-rs"
 trusted_issuers = ["https://idp.example.com/application/o/second-brain/"]
 discovery_authorization_server = "https://idp.example.com/application/o/second-brain/"
+# JWKS resolves relative to each issuer: .well-known/jwks.json.
+# Cache reuse TTL; 0 disables reuse. Failed/unknown-key refreshes are guarded.
 jwks_cache_ttl_seconds = 3600
-jwt_algorithms = ["RS256"]
-# Development-mode scopes used when a client sends no explicit scope claim.
-development_default_scopes = ["vault:read", "vault:write", "vault:capture", "daily:append"]
+jwt_algorithms = ["RS256", "ES256"]
+# Development only: missing/malformed headers or unknown scopes use this fallback.
+# Explicit development tokens can choose any known scope; they are not secure auth.
+development_default_scopes = []
 
 [index]
-# Optional sqlite_path; defaults to {state_path}/index.sqlite.
+# sqlite_path = "/path/to/state/index.sqlite" # default: {state_path}/index.sqlite
+# Compatibility setting: no background watcher is implemented.
 watcher_polling = false
 ignored_globs = [
     ".obsidian/workspace*",
@@ -27,32 +29,45 @@ ignored_globs = [
     "**/.DS_Store",
     "**/*.sync-conflict-*",
 ]
+# Search/list exclusions; these are not a write prohibition.
+blocked_paths = []
+
+[security]
+# Vault-relative hard denylist for ordinary reads, writes and framework access.
+# Matching normalizes NFC Unicode then ignores case, including nonexistent prefixes.
+# Skill maps/candidates and their canonical targets are added automatically.
+blocked_paths = []
 
 [writes]
+# Existing-note mutation cooldown; 0 disables it.
 cooldown_seconds = 2
 
+[deletes]
+# Soft-delete destination, within the same vault filesystem.
+trash_path = ".trash/mcp"
+
 [audit]
-# When greater than 0, startup archives the write-audit DB once it exceeds this.
+# Startup rotation threshold for successful-write rows; 0 disables rotation.
 retention_max_rows = 0
-
-[daily_note]
-# A = inline daily append; B = dated capture records (default).
-capture_default_pattern = "B"
-
-[ocr]
-enabled = false
-
-[logging]
-# Keep false unless debugging locally; tool args can contain private vault text.
-log_args = false
+# archive_path = "/path/to/state/audit-archive" # default: {state_path}/audit-archive
 
 [framework]
 schema_path = "_meta/framework.yaml"
 
 [skills]
-# Vault-relative maps linking to private skill notes; exposed only via skills:read prompts.
+# Vault-relative maps linking to skill notes, served through skills:read prompts.
 map_paths = []
 
-[security]
-# Hard denylist applied to reads, search and (when enabled) writes.
-blocked_paths = []
+[daily_note]
+# Compatibility setting only: parsed but not used to route captures.
+# Use daily_note_append for inline capture or capture_for_date for capture records.
+capture_default_pattern = "B"
+
+[ocr]
+# Exposes in-memory job-contract tools; does not install/run an OCR worker.
+enabled = false
+
+[logging]
+# False logs argument hashes. True also logs arguments after credential redaction;
+# note text and arbitrary fields may still contain private data.
+log_args = false

@@ -55,6 +55,8 @@ pub struct ServerConfig {
     pub index: IndexConfig,
     /// Write settings.
     pub writes: WritesConfig,
+    /// Soft deletion configuration.
+    pub deletes: DeletesConfig,
     /// Audit settings.
     pub audit: AuditConfig,
     /// Framework settings.
@@ -127,6 +129,14 @@ pub struct IndexConfig {
 pub struct WritesConfig {
     /// Cooldown window before overwriting an existing file (seconds).
     pub cooldown_seconds: u64,
+}
+
+/// Soft deletion settings.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct DeletesConfig {
+    /// Vault-relative trash directory.
+    pub trash_path: String,
 }
 
 /// Audit configuration.
@@ -219,6 +229,8 @@ struct RawConfig {
     index: RawIndex,
     writes: RawWrites,
     #[serde(default)]
+    deletes: RawDeletes,
+    #[serde(default)]
     audit: RawAudit,
     #[serde(default)]
     framework: RawFramework,
@@ -270,6 +282,11 @@ struct RawWrites {
 }
 
 #[derive(Deserialize, Default)]
+struct RawDeletes {
+    trash_path: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
 struct RawAudit {
     retention_max_rows: Option<u64>,
     archive_path: Option<String>,
@@ -293,6 +310,18 @@ struct RawOcr {
 #[derive(Deserialize)]
 struct RawLogging {
     log_args: bool,
+}
+
+impl RawDeletes {
+    fn validate(self) -> Result<DeletesConfig, ConfigError> {
+        let path = non_empty(
+            self.trash_path.unwrap_or_else(|| ".trash/mcp".to_owned()),
+            "deletes.trash_path",
+        )?;
+        Ok(DeletesConfig {
+            trash_path: normalize_vault_path(&path).map_err(|e| invalid(&e.to_string()))?,
+        })
+    }
 }
 
 impl RawConfig {
@@ -376,6 +405,7 @@ impl RawConfig {
             writes: WritesConfig {
                 cooldown_seconds: self.writes.cooldown_seconds,
             },
+            deletes: self.deletes.validate()?,
             audit: AuditConfig {
                 retention_max_rows: self.audit.retention_max_rows.unwrap_or(0),
                 archive_path: self.audit.archive_path,

@@ -21,14 +21,14 @@ integration tests pass outside the network sandbox. Empty-query search fails.
 |---|---|---|---|
 | A / protocol agent | 0.2.0 | Complete read/index/parser behavior; root folder and empty search inputs; exact tool schemas and scope registry including delete and skills tools; MCP initialize/list/call, per-request auth propagation, errors and structured results; skill maps/loading/reloading/prompts and effective privacy policy; optional OCR queue/status/renumber contract; read/transport/skills/OCR tests; baseline docs | Existing phase-2 work |
 | B / storage agent | 0.3.0 | Atomic create/replace/frontmatter/marker writes, optimistic concurrency, per-path serialization, cooldown, traversal/symlink/conflict protection, soft/hard deletion, audit lifecycle/rotation/recovery; runtime wiring and write/delete config; negative and failure-path tests | A integrated before merge |
-| C / framework agent | 0.4.0 | YAML schema validation, LYT/PARA/Zettel presets, overlays and registry persistence, initialize/reload/register/unregister/list/compose; record types/maps/structure, templates, records, idempotent source captures, daily get/append/repair and both capture strategies; route every mutation through audited writer | B writer APIs; A privacy policy |
+| C / framework agent | 0.4.0 | YAML schema validation, LYT/PARA/Zettel presets, overlays and registry persistence, initialize/reload/register/unregister/list/compose; record types/maps/structure, templates, records, idempotent source captures, daily get/append/repair and both capture strategies; route every note mutation through audited writer; metadata uses atomic policy-checked writes | B writer APIs; A privacy policy |
 | D / auth agent | 0.5.0 | Actual RS256/ES256 JWT/JWKS verification, issuer/audience/time/algorithm/subject checks, caching and rollover, fail-closed auth, dev loopback restriction, HTTP challenges/discovery and eight scopes; comprehensive auth tests; final configuration/user/deployment docs and parity closure | A protocol; final rebase after C |
 
 Each owner owns its new modules and tests. Shared files (`Cargo.toml`, lockfile,
 config, runtime, module exports, registry, MCP/HTTP) are edited in separate
 worktrees and reconciled explicitly at integration. No agent edits another
-agent's worktree. Storage exposes reusable audited mutation methods so framework
-code cannot bypass write policy; agents coordinate the concrete API before wiring.
+agent's worktree. Storage exposes reusable audited mutation methods so framework note
+mutations cannot bypass write policy; schema/registry metadata uses dedicated atomic, policy-checked writes; agents coordinate the concrete API before wiring.
 Skills privacy policy must apply to every read, index query, write and framework
 mutation, including after reload. Auth changes may change the auth trait to async.
 
