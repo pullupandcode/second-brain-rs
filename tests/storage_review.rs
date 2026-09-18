@@ -26,6 +26,7 @@ fn rejects_windows_drive_prefixes_on_every_platform() {
         normalize_vault_path("./Notes/ok.md").unwrap(),
         "Notes/ok.md"
     );
+    assert_eq!(normalize_vault_path("1:note.md").unwrap(), "1:note.md");
 }
 
 #[cfg(unix)]

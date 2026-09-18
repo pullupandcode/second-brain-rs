@@ -1,4 +1,4 @@
-//! Audited, atomic vault mutations with optimistic concurrency and path policy.
+//! Audited vault mutations with atomic content publication, optimistic hashes and path policy.
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
@@ -274,13 +274,10 @@ impl VaultWriter {
             let error = result.as_ref().err().map(ToString::to_string);
             let _completion = tokio::task::spawn_blocking(move || {
                 if let Some(hash) = hash {
-                    if let Some(attempt) = attempt
-                        && let Err(error) = audit.record_write_succeeded(&attempt, &hash)
+                    if let Err(error) =
+                        audit.record_write_completed(&input, attempt.as_deref(), &hash)
                     {
-                        tracing::error!(%error,"write audit completion failed");
-                    }
-                    if let Err(error) = audit.record_write(&input, &hash) {
-                        tracing::error!(%error,"write provenance failed");
+                        tracing::error!(%error, "write audit completion/provenance failed");
                     }
                 } else if let (Some(attempt), Some(error)) = (attempt, error)
                     && let Err(error) = audit.record_write_failed(&attempt, &error)

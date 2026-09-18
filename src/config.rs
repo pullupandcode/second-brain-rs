@@ -85,7 +85,8 @@ pub struct SkillsConfig {
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct SecurityConfig {
-    /// Hard denylist: paths blocked from all read/write/search operations.
+    /// Paths blocked from ordinary vault reads, writes and searches.
+    /// Configured skills remain a separately authorized `skills:read` surface.
     pub blocked_paths: Vec<String>,
 }
 
@@ -119,7 +120,7 @@ pub struct IndexConfig {
     pub watcher_polling: bool,
     /// Globs excluded from indexing.
     pub ignored_globs: Vec<String>,
-    /// Paths softly excluded from the index and listings (not write-blocking).
+    /// Paths softly excluded from direct reads, indexing and listings (not write-blocking).
     pub blocked_paths: Vec<String>,
 }
 

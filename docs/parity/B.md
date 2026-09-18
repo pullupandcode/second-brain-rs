@@ -142,3 +142,36 @@ property test compares exact float bits after write/read for randomized finite
 values, normalizing negative zero as JavaScript does. Nightly formatting and
 all-target/all-feature Clippy with warnings denied pass. No dependency was added
 by this fix; ryu-js is already part of A.
+
+
+## PR #49 review follow-up (2026-09-18)
+
+See [the review disposition](B_REVIEW.md) for the two inline comments and the
+additional observations in the review summary. Regression fixes reject empty
+normalized trash paths and drive-prefixed vault paths, preserve Unix replacement
+permission bits, keep incomplete audit attempts live during retention, prevent
+archive collisions and commit completion/provenance together. Windows storage
+CI exercises existing-file replacement through the supported Tokio/Rust API.
+These are included in the unreleased 0.3.0 scope; v0.2.0 remains immutable.
+
+Write quarantine is a startup snapshot. Creating or resolving a sync-conflict
+file externally requires a restart to update enforcement, even if a later
+mutation refreshes conflict listings. Full post-mutation index rebuilds provide
+immediate read-after-write consistency but cost O(vault size); no incremental
+indexing or external watcher is claimed.
+
+Soft deletion reserves a trash hard link and then unlinks the original. It is
+not a single atomic rename: a crash or cancellation can leave both names. When
+an audit start was recorded without a terminal event, recovery diagnostics retain
+the pending path. Reconcile it by checking the original and corresponding trash
+candidates and comparing their content/hashes before choosing which copy to keep;
+never automatically remove a copy merely because an attempt is incomplete. Audit
+persistence remains best effort, so failed start logging cannot guarantee a
+recovery entry. There is no automatic rollback or destructive recovery.
+
+Retention is deferred while incomplete attempts remain, so the row threshold
+is not a hard cap. Archive publication reserves a new filename before renaming;
+cancellation can leave an empty reserved placeholder but cannot replace an older
+archive. Publication requires the live database and archive on one filesystem.
+Replacement preserves portable permissions, including Unix mode bits; it does
+not promise preservation of extended ACLs, ownership or other platform metadata.

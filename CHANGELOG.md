@@ -34,6 +34,7 @@
 
 ## [0.3.0] - 2026-09-16
 
+- Keep incomplete audit attempts in the live store by deferring retention; reserve archive destinations without overwriting existing history and commit completion/provenance in one transaction.
 - Reject trash paths that normalize to the vault root and Windows drive-prefixed vault paths.
 - Preserve Unix permission bits during replacement, frontmatter and marker writes; prepare replacement files with restricted temporary permissions.
 - Exercise storage replacement and path validation on Windows CI using Tokio's documented existing-file replacement behavior.
