@@ -134,3 +134,18 @@ async fn writer_preserves_completed_note_and_pending_recovery_on_audit_failure()
     assert!(audit.list_recent_writes(None).unwrap().is_empty());
     assert_eq!(audit.list_incomplete_writes(None).unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn rotating_absent_database_has_no_filesystem_side_effects() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("absent.sqlite");
+    let archive = dir.path().join("archive");
+    assert!(
+        rotate_write_audit_if_needed(&path, &archive, 1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(!path.exists());
+    assert!(!archive.exists());
+}

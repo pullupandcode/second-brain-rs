@@ -1,7 +1,7 @@
 //! Regression coverage for storage review findings.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use second_brain_rs::vault::path::{VaultPathError, normalize_vault_path};
+use second_brain_rs::vault::path::{MAX_VAULT_PATH_LEN, VaultPathError, normalize_vault_path};
 
 #[test]
 fn rejects_windows_drive_prefixes_on_every_platform() {
@@ -106,4 +106,14 @@ async fn replacement_mutations_preserve_unix_permissions() {
             mode
         );
     }
+}
+
+#[test]
+fn path_length_limit_accepts_boundary_and_rejects_overflow() {
+    let boundary = "a".repeat(MAX_VAULT_PATH_LEN);
+    assert_eq!(normalize_vault_path(&boundary).unwrap(), boundary);
+    assert!(matches!(
+        normalize_vault_path(&"a".repeat(MAX_VAULT_PATH_LEN + 1)),
+        Err(VaultPathError::TooLong)
+    ));
 }

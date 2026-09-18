@@ -231,6 +231,28 @@ mod recovery_tests {
     use super::*;
 
     #[tokio::test]
+    async fn archive_reservation_returns_noncollision_errors_promptly() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("live.sqlite");
+        tokio::fs::write(&source, b"live history").await.unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            archive_at(
+                &source,
+                &dir.path().join("missing-directory"),
+                time::OffsetDateTime::UNIX_EPOCH,
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(result, Err(AuditError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound)
+        );
+        assert_eq!(tokio::fs::read(&source).await.unwrap(), b"live history");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
     async fn failed_archive_rename_cleans_up_only_its_reservation() {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("missing.sqlite");
