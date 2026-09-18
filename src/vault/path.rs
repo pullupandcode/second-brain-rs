@@ -48,6 +48,13 @@ pub fn normalize_vault_path(input: &str) -> Result<String, VaultPathError> {
             other => segments.push(other),
         }
     }
+    // Reject Windows drive-relative as well as absolute drive paths on every
+    // platform, including prefixes revealed by removing leading dot segments.
+    if segments.first().is_some_and(
+        |segment| matches!(segment.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic()),
+    ) {
+        return Err(VaultPathError::NotRelative);
+    }
     Ok(segments.join("/"))
 }
 

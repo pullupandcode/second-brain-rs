@@ -473,13 +473,24 @@ impl VaultWriter {
                 .unwrap_or("note"),
             unique_id()
         ));
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)
-            .await?;
+        let permissions = if create {
+            None
+        } else {
+            Some(tokio::fs::metadata(absolute).await?.permissions())
+        };
+        let mut options = tokio::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if !create {
+            // Replacement content stays private while the temporary file is prepared.
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temp).await?;
         let prepared = async {
             file.write_all(content.as_bytes()).await?;
+            if let Some(permissions) = permissions {
+                file.set_permissions(permissions).await?;
+            }
             file.sync_all().await?;
             Ok::<(), std::io::Error>(())
         }

@@ -34,6 +34,10 @@
 
 ## [0.3.0] - 2026-09-16
 
+- Reject trash paths that normalize to the vault root and Windows drive-prefixed vault paths.
+- Preserve Unix permission bits during replacement, frontmatter and marker writes; prepare replacement files with restricted temporary permissions.
+- Exercise storage replacement and path validation on Windows CI using Tokio's documented existing-file replacement behavior.
+
 - Implement atomic create/replace, frontmatter patches and marker replacements with optimistic hashes, cooldown and per-path serialization.
 - Serialize numeric frontmatter with JavaScript canonical number spelling, preserving finite values across write/read roundtrips.
 - Add soft deletion with collision-safe trash destinations and separate permanent deletion.
