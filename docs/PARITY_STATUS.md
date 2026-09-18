@@ -1,22 +1,25 @@
 # Parity delivery ledger
 
 Reference: second-brain-mcp v1.1.1 at
-`48b272337a6ef7e381fd175b2ff1844c02cebd7a`. Status snapshot: 2026-09-16.
+`48b272337a6ef7e381fd175b2ff1844c02cebd7a`. Status snapshot: 2026-09-18.
 See the [plan, ownership and adopted stories](PARITY_PLAN.md).
 
 Scope A merged through [PR #51](https://github.com/pullupandcode/second-brain-rs/pull/51)
 at `2b6dcf1c2a6cf0278a363691d57a9c20d51811cb`. After successful main CI,
 [v0.2.0](https://github.com/pullupandcode/second-brain-rs/releases/tag/v0.2.0)
 was published and verified `immutable: true` (release ID `390166401`).
-The other three implementation PRs remain open and are rebased on that actual
-squash commit. Implementation verification and release delivery remain separate gates.
+The user approved and merged [PR #52](https://github.com/pullupandcode/second-brain-rs/pull/52)
+ahead of the remaining stack at `8b98349f1126c8ea02f7b4ac2c0074ae69d9acda`.
+That squash has the exact tree of independently approved D head `5d5c046`,
+which includes the approved B and C commits. Storage and frameworks are therefore
+already on main. #50 is superseded; #49 retains only the later storage review
+fixes and a 0.5.1 patch bump. Planned versions 0.3.0/0.4.0 were never published.
 
-| Scope / planned version | PR | Integrated tests | Merge / release |
+| Scope / delivered version | PR | Verification | Merge / release |
 |---|---|---|---|
-| A: protocol, reads, skills, OCR / 0.2.0 | [#51](https://github.com/pullupandcode/second-brain-rs/pull/51) | 89 passed; squash tree equals reviewed `446e2e8` | Merged `2b6dcf1`; immutable [v0.2.0](https://github.com/pullupandcode/second-brain-rs/releases/tag/v0.2.0) |
-| B: writes, deletes, audit / 0.3.0 | [#49](https://github.com/pullupandcode/second-brain-rs/pull/49) | 110 passed after squash rebase | Not merged or published |
-| C: frameworks, records, daily / 0.4.0 | [#50](https://github.com/pullupandcode/second-brain-rs/pull/50) | 146 passed after squash rebase | Not merged or published |
-| D: JWT, deployment, closure / 0.5.0 | [#52](https://github.com/pullupandcode/second-brain-rs/pull/52) | 182 passed after squash rebase | Not merged or published |
+| A: protocol, reads, skills, OCR / 0.2.0 | #51 | 89 tests; reviewed squash tree | Merged `2b6dcf1`; immutable v0.2.0 |
+| B/C/D: storage, framework, auth / 0.5.0 | #52 (includes #50 and original #49 scope) | 182 tests; both reviewers approved `5d5c046`; squash tree identical | Merged `8b98349`; immutable [v0.5.0](https://github.com/pullupandcode/second-brain-rs/releases/tag/v0.5.0), release ID `391790243` |
+| Storage review fixes / 0.5.1 | #49 | 196 combined tests; format, strict Clippy, dependency gates and patch semver check pass; exact-head reviews/CI required | Unmerged; unreleased |
 
 Each candidate passes nightly formatting, current-stable Clippy with warnings
 denied, all-feature tests, cargo-deny and cargo-audit. Counts include inherited
@@ -54,25 +57,21 @@ GitHub identity and do not represent separate human accounts.
 ## Remaining merge and release gates
 
 GitHub ruleset `17368994` requires one formal approval from another account.
-This remains a gate for the unmerged PRs; the user completed scope A's merge.
-The coordinator has not changed or bypassed repository protections. The latest
-review decision and CI state are visible on each PR.
+The coordinator has not changed or bypassed repository protections. The user
+approved the combined #52 merge; #49 still requires both independent exact-head
+agent decisions, green CI and the repository's formal review gate.
 
-A is merged and released. Continue B → C → D. B now directly descends from A's
-actual squash commit; C and D descend through the updated dependency branches.
-The rebase changed ancestry without changing implementation files. Documentation
-records the new merge/release state, and both independent reviewers renew their
-exact-head decisions after those edits. After each subsequent squash merge, rebase the dependent PR onto the
-actual squash commit, renew both independent exact-head approvals, and satisfy
-CI and required GitHub review again. Each version bump is then published at the
-approved merge commit after main CI passes. Native release immutability is enabled;
-publish each draft only after its notes/assets are complete and verify
-`immutable: true`. Never retag or replace published versions.
+The original B → C → D sequence is superseded. Main CI run `35395371018`
+passed for the #52 squash; v0.5.0 was published and verified `immutable: true`.
+Merge #49 as the 0.5.1 patch only after its renewed gates pass, then
+publish at its actual squash following main CI. Do not merge #50 again, create
+retroactive 0.3.0/0.4.0 releases, or rewrite published versions.
 
-Scope A's adopted stories are fulfilled by #51 and v0.2.0. Remaining stories
-stay open until their reviewed implementation merges; shared issue #30 waits
-for both B and C. Versions 0.3.0–0.5.0 have not been published, so the full
-delivery plan remains incomplete.
+Original B/C implementation stories were incorporated by #52; #30's shared
+implementation is now present. Storage review fixes remain pending #49. Tracker
+acceptance and release closure must reflect this actual delivery sequence.
+The [review disposition](parity/B_REVIEW.md) documents fixes and remaining
+operational limitations, including startup quarantine and interrupted soft delete.
 
 Reference limitations and deliberate differences are documented in [A](parity/A.md),
 [B](parity/B.md), [C](parity/C.md) and [D](parity/auth.md). OCR is the reference

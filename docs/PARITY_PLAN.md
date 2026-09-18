@@ -1,5 +1,16 @@
 # Full parity delivery plan
 
+## Delivery update (2026-09-18)
+
+The user approved merging #52 ahead of the stack. Its squash `8b98349` includes
+the previously reviewed B/C/D implementation at version 0.5.0. The original
+0.3.0/0.4.0 scope versions below are not separate published releases. #50 is
+superseded; #49 carries only later storage review fixes as 0.5.1. The original
+sequence and four separate merge criteria below are historical: current delivery
+requires immutable v0.5.0 publication and reviewed #49 patch merge/release, with
+no duplicate framework merge. All exact-head verification gates still apply.
+See [the delivery ledger](PARITY_STATUS.md) for current state.
+
 ## Target and baseline
 
 Match the observable behavior of local `second-brain-mcp` v1.1.1, commit
