@@ -14,17 +14,25 @@ requires no bump.
 | D (including B/C) | 0.5.0 | Production JWT/JWKS, auth hardening, final parity and deployment docs |
 
 PR #52 was approved and merged first on 2026-09-18 at `8b98349`, bringing B, C
-and D into main together. PR #50 is superseded by that merge. PR #49 now contains
-only subsequent storage review fixes and the 0.5.1 patch bump. Do not create
+and D into main together. PR #50 is superseded by that merge. PR #49 merged at
+`bf78768` and is published as immutable v0.5.1. Version 0.5.2 adds automatic
+executable releases. Do not create
 retroactive 0.3.0/0.4.0 releases or downgrade the crate.
 
 Historical tracker phases, including skill Phase 6, are consolidated into these
 four release scopes; [PARITY_PLAN.md](PARITY_PLAN.md) defines issue ownership.
 
 Each PR requires separate code-review and QA approvals for the exact final head
-and green CI. The original A/B/C/D sequence was superseded by the approved combined #52 merge.
-Squash the remaining #49 patch onto that actual main commit. After main checks pass, create an
-annotated `vX.Y.Z` tag on the squash commit. With repository immutable releases
-enabled, create a draft release, finish notes/assets, publish, and verify
-`immutable: true` through GitHub's API. Never rewrite published tags or releases.
-If immutability cannot be verified, stop publication. Existing v0.1.0 remains intact.
+and green CI. A release PR updates Cargo.toml, the root package entry in Cargo.lock,
+and a nonempty `## [X.Y.Z] - YYYY-MM-DD` changelog section. Stable versions must
+increase; prereleases/build metadata and downgrades are rejected by automation.
+A merge with an unchanged version runs checks but does not publish another release.
+
+From v0.5.2, the `ci` workflow builds and smoke-tests four native executable
+archives on release PRs. After a version-bumped PR merges into main, publication
+waits for all checks and builds, creates an annotated tag at that exact merge,
+uploads every archive and SHA256SUMS to a draft, and publishes the complete release.
+GitHub must report `immutable: true` before the job succeeds. PR runs cannot publish.
+See [RELEASING.md](RELEASING.md) for permissions, platform baselines, retry behavior
+and the repository-level immutability prerequisite. Never rewrite published tags,
+replace immutable assets, or retroactively publish the skipped 0.3.0/0.4.0 stages.

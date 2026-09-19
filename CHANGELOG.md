@@ -2,7 +2,15 @@
 
 ## [Unreleased]
 
-## [0.5.1] - Unreleased
+## [0.5.2] - 2026-09-18
+
+- Build and smoke-test downloadable native executables for Linux x86-64, Windows x86-64, and macOS Apple Silicon/Intel in pull-request CI.
+- Automatically publish version-bumped main merges as immutable GitHub releases after all tests and platform builds pass.
+- Package the executable, example configuration, README and licenses; upload SHA-256 checksums before publication.
+- Validate Cargo/lockfile/changelog versions and release tags, with resumable draft uploads and no rewriting of published releases.
+- Document binary installation, release permissions, versioning and recovery procedures.
+
+## [0.5.1] - 2026-09-18
 
 - Keep incomplete audit attempts in the live store by deferring retention; reserve archive destinations without overwriting existing history and commit completion/provenance in one transaction.
 - Reject trash paths that normalize to the vault root and Windows drive-prefixed vault paths.
