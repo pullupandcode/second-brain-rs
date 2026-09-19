@@ -29,7 +29,15 @@ cargo +stable deny check
 cargo +stable audit
 ```
 
-All five must pass. Authentication/configuration/input-validation changes also
+All five must pass. Release automation changes also require Python 3.12+ tests:
+
+```bash
+python -m unittest discover -s tests/release -v
+```
+
+CI validates version consistency and builds, packages and smoke-tests all four
+native release targets when the version increases. Keep Cargo.toml, Cargo.lock
+and the versioned changelog section in sync. See [release operations](docs/RELEASING.md). Authentication/configuration/input-validation changes also
 require focused mutation testing with a passing unmutated baseline and documented
 survivors. Use `RUSTUP_TOOLCHAIN=stable cargo mutants ...` so its child builds use
 the same toolchain as CI. Public API changes require `cargo semver-checks` against
