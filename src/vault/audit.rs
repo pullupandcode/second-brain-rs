@@ -92,6 +92,27 @@ CREATE INDEX IF NOT EXISTS write_audit_attempts_attempt_id_idx ON write_audit_at
         self.db.lock().unwrap_or_else(std::sync::PoisonError::into_inner).execute("INSERT INTO write_audit(operation,path,base_sha256,result_sha256,metadata_json) VALUES(?,?,?,?,?)",params![input.operation,input.path,input.base_sha256,hash,input.metadata.to_string()])?;
         Ok(())
     }
+    /// Persist successful provenance and its optional terminal lifecycle event together.
+    /// # Errors
+    /// Returns a database error when completion cannot be persisted.
+    pub fn record_write_completed(
+        &self,
+        input: &AuditInput,
+        attempt_id: Option<&str>,
+        hash: &str,
+    ) -> Result<(), AuditError> {
+        let mut db = self
+            .db
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let transaction = db.transaction()?;
+        if let Some(id) = attempt_id {
+            transaction.execute("INSERT INTO write_audit_attempts(attempt_id,event_type,result_sha256) VALUES(?,'succeeded',?)", params![id, hash])?;
+        }
+        transaction.execute("INSERT INTO write_audit(operation,path,base_sha256,result_sha256,metadata_json) VALUES(?,?,?,?,?)", params![input.operation,input.path,input.base_sha256,hash,input.metadata.to_string()])?;
+        transaction.commit()?;
+        Ok(())
+    }
     /// Return incomplete lifecycle starts, newest first, with a bounded limit.
     /// # Errors
     /// Returns a database error if the query fails.
@@ -118,10 +139,16 @@ CREATE INDEX IF NOT EXISTS write_audit_attempts_attempt_id_idx ON write_audit_at
     }
 }
 /// Rotate before opening the live store when successful rows exceed retention.
-/// Returns the archive path when rotation occurs.
+///
+/// Returns the archive path when rotation occurs. Retention is a soft limit:
+/// unfinished lifecycle attempts defer rotation until explicitly reconciled, so
+/// recovery diagnostics remain visible in the live store. Archives remain on the
+/// same filesystem as the live store. Filename collisions gain a UUID suffix.
 /// # Errors
 /// Returns database, filesystem, or background-task failures.
-// NOT cancel-safe: filesystem rename may complete before cancellation is observed.
+// NOT cancel-safe: rename may complete before cancellation is observed. Cancellation
+// after exclusive destination reservation can leave an empty archive placeholder;
+// it contains no historical records and cannot overwrite an earlier archive.
 pub async fn rotate_write_audit_if_needed(
     path: &Path,
     archive: &Path,
@@ -131,24 +158,57 @@ pub async fn rotate_write_audit_if_needed(
         return Ok(None);
     }
     let owned = path.to_path_buf();
-    let count = tokio::task::spawn_blocking(move || -> Result<i64, rusqlite::Error> {
+    let can_rotate = tokio::task::spawn_blocking(move || -> Result<bool, rusqlite::Error> {
         let db = Connection::open(owned)?;
-        Ok(db
-            .query_row("SELECT count(*) FROM write_audit", [], |r| r.get(0))
-            .unwrap_or(0))
-    })
-    .await??;
-    if u64::try_from(count).unwrap_or(0) <= max_rows {
+        let count: i64 = db.query_row("SELECT count(*) FROM write_audit", [], |r| r.get(0)).unwrap_or(0);
+        if u64::try_from(count).unwrap_or(0) <= max_rows {
+            return Ok(false);
+        }
+        let pending: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM write_audit_attempts s WHERE s.event_type='started' AND NOT EXISTS(SELECT 1 FROM write_audit_attempts t WHERE t.attempt_id=s.attempt_id AND t.event_type IN ('succeeded','failed')))", [], |r| r.get(0))?;
+        Ok(!pending)
+    }).await??;
+    if !can_rotate {
         return Ok(None);
     }
     tokio::fs::create_dir_all(archive).await?;
-    let destination = archive.join(format!(
-        "write-audit.{}.sqlite",
-        archive_timestamp(time::OffsetDateTime::now_utc())
-    ));
-    tokio::fs::rename(path, &destination).await?;
-    Ok(Some(destination))
+    archive_at(path, archive, time::OffsetDateTime::now_utc())
+        .await
+        .map(Some)
 }
+async fn archive_at(
+    path: &Path,
+    archive: &Path,
+    now: time::OffsetDateTime,
+) -> Result<PathBuf, AuditError> {
+    let timestamp = archive_timestamp(now);
+    let mut destination = archive.join(format!("write-audit.{timestamp}.sqlite"));
+    loop {
+        match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&destination)
+            .await
+        {
+            Ok(reservation) => {
+                drop(reservation);
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                destination =
+                    archive.join(format!("write-audit.{timestamp}.{}.sqlite", unique_id()));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    // Replace only the empty file this call exclusively reserved. Rename avoids
+    // an archived hard link remaining aliased to a live database after cancellation.
+    if let Err(error) = tokio::fs::rename(path, &destination).await {
+        let _cleanup = tokio::fs::remove_file(&destination).await;
+        return Err(error.into());
+    }
+    Ok(destination)
+}
+
 pub(crate) fn unique_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -163,4 +223,62 @@ fn archive_timestamp(now: time::OffsetDateTime) -> String {
         now.second(),
         now.millisecond()
     )
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod recovery_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn archive_reservation_returns_noncollision_errors_promptly() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("live.sqlite");
+        tokio::fs::write(&source, b"live history").await.unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            archive_at(
+                &source,
+                &dir.path().join("missing-directory"),
+                time::OffsetDateTime::UNIX_EPOCH,
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(result, Err(AuditError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound)
+        );
+        assert_eq!(tokio::fs::read(&source).await.unwrap(), b"live history");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn failed_archive_rename_cleans_up_only_its_reservation() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("missing.sqlite");
+        let now = time::OffsetDateTime::UNIX_EPOCH;
+        let historical = dir
+            .path()
+            .join(format!("write-audit.{}.sqlite", archive_timestamp(now)));
+        tokio::fs::write(&historical, b"old archive").await.unwrap();
+        assert!(archive_at(&source, dir.path(), now).await.is_err());
+        assert_eq!(tokio::fs::read(&historical).await.unwrap(), b"old archive");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+    #[tokio::test]
+    async fn archive_collision_preserves_old_archive_and_current_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("live.sqlite");
+        let now = time::OffsetDateTime::UNIX_EPOCH;
+        let expected = dir
+            .path()
+            .join(format!("write-audit.{}.sqlite", archive_timestamp(now)));
+        tokio::fs::write(&source, b"new database").await.unwrap();
+        tokio::fs::write(&expected, b"old archive").await.unwrap();
+        let actual = archive_at(&source, dir.path(), now).await.unwrap();
+        assert_eq!(tokio::fs::read(&expected).await.unwrap(), b"old archive");
+        assert_ne!(actual, expected);
+        assert_eq!(tokio::fs::read(&actual).await.unwrap(), b"new database");
+        assert!(!source.exists());
+    }
 }

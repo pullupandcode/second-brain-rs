@@ -2,10 +2,10 @@
 
 A Rust Streamable HTTP MCP server for Markdown vaults, targeting
 [`second-brain-mcp` v1.1.1](https://github.com/pullupandcode/second-brain-mcp/tree/48b272337a6ef7e381fd175b2ff1844c02cebd7a).
-The combined **v0.5.0 candidate** includes audited note mutations, frameworks,
+The combined **v0.5.0 implementation**, merged through #52, includes audited note mutations, frameworks,
 captures, daily notes, private skill prompts, and production JWT verification.
-It is not a published or fully approved parity release: integration and review
-status are tracked in the [delivery ledger](docs/PARITY_STATUS.md).
+The **v0.5.1 candidate** adds storage review fixes. Release status, verification
+and known limitations are tracked in the [delivery ledger](docs/PARITY_STATUS.md).
 
 Build with current stable Rust:
 

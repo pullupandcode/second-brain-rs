@@ -1,4 +1,4 @@
-//! Audited, atomic vault mutations with optimistic concurrency and path policy.
+//! Audited vault mutations with atomic content publication, optimistic hashes and path policy.
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
@@ -274,13 +274,10 @@ impl VaultWriter {
             let error = result.as_ref().err().map(ToString::to_string);
             let _completion = tokio::task::spawn_blocking(move || {
                 if let Some(hash) = hash {
-                    if let Some(attempt) = attempt
-                        && let Err(error) = audit.record_write_succeeded(&attempt, &hash)
+                    if let Err(error) =
+                        audit.record_write_completed(&input, attempt.as_deref(), &hash)
                     {
-                        tracing::error!(%error,"write audit completion failed");
-                    }
-                    if let Err(error) = audit.record_write(&input, &hash) {
-                        tracing::error!(%error,"write provenance failed");
+                        tracing::error!(%error, "write audit completion/provenance failed");
                     }
                 } else if let (Some(attempt), Some(error)) = (attempt, error)
                     && let Err(error) = audit.record_write_failed(&attempt, &error)
@@ -473,13 +470,24 @@ impl VaultWriter {
                 .unwrap_or("note"),
             unique_id()
         ));
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)
-            .await?;
+        let permissions = if create {
+            None
+        } else {
+            Some(tokio::fs::metadata(absolute).await?.permissions())
+        };
+        let mut options = tokio::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if !create {
+            // Replacement content stays private while the temporary file is prepared.
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temp).await?;
         let prepared = async {
             file.write_all(content.as_bytes()).await?;
+            if let Some(permissions) = permissions {
+                file.set_permissions(permissions).await?;
+            }
             file.sync_all().await?;
             Ok::<(), std::io::Error>(())
         }

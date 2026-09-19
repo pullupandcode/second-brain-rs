@@ -1,7 +1,7 @@
 # Storage parity scope B
 
 Target: second-brain-mcp v1.1.1 / 48b272337a6ef7e381fd175b2ff1844c02cebd7a.
-Stories: #20–#25, primitive storage portion of #30, #40. Release 0.3.0.
+Stories: #20–#25, primitive storage portion of #30, #40. Originally planned as 0.3.0; included in the combined 0.5.0 merge.
 
 ## Reference mapping
 
@@ -53,9 +53,10 @@ The property test covers valid frontmatter scalars and body preservation.
 
 ## Integrated candidate
 
-The B commits are rebased onto A's actual squash merge
-`2b6dcf1c2a6cf0278a363691d57a9c20d51811cb` from PR #51, published as immutable
-[v0.2.0](https://github.com/pullupandcode/second-brain-rs/releases/tag/v0.2.0). Runtime,
+The original storage implementation was incorporated by PR #52 at
+`8b98349f1126c8ea02f7b4ac2c0074ae69d9acda`, together with framework and auth
+work, at version 0.5.0. PR #49 now rebases only its three later review-fix commits
+onto that actual squash and increments the patch version to 0.5.1. Runtime,
 reader, index and writer share A's reloadable PathPolicy. Existing OCR coded
 errors, MCP request authentication, prompts and exact eight-scope registry are
 preserved. The three added HTTP tests exercise primitive write roundtrips,
@@ -69,12 +70,13 @@ Runtime::create, and invalid input errors without creating files or successful
 audit rows. String/list serialization tests cover escaped quotes, backslashes,
 newlines and embedded commas against A's parser.
 
-The squash rebase preserves the previously reviewed implementation tree. All 110
-tests, formatting, strict Clippy, cargo-deny and cargo-audit pass after the rebase.
-The forced-patch semver diagnostic remains the documented Runtime unwind-safety
-change for 0.3.0. Both independent reviewers must approve the latest exact head,
-and required CI and GitHub reviews must pass before merging B. C consumes
-Runtime::writer() for audited framework mutations.
+The original standalone B candidate passed 110 tests. Its review follow-up
+passed 124 tests before integration with C/D. The combined 0.5.1 candidate passes all 196 tests, formatting, strict Clippy,
+cargo-deny, cargo-audit and all 223 applicable patch semver checks against
+actual main. Fresh exact-head code and QA reviews plus Linux/Windows CI remain
+required merge gates. It retains the v0.5.0 authentication and framework changes;
+only storage review fixes and release records change. Public API compatibility
+is checked against actual main, not the historical A baseline.
 
 ## Standalone draft checks (2026-09-16)
 
@@ -142,3 +144,37 @@ property test compares exact float bits after write/read for randomized finite
 values, normalizing negative zero as JavaScript does. Nightly formatting and
 all-target/all-feature Clippy with warnings denied pass. No dependency was added
 by this fix; ryu-js is already part of A.
+
+
+## PR #49 review follow-up (2026-09-18)
+
+See [the review disposition](B_REVIEW.md) for the two inline comments and the
+additional observations in the review summary. Regression fixes reject empty
+normalized trash paths and drive-prefixed vault paths, preserve Unix replacement
+permission bits, keep incomplete audit attempts live during retention, prevent
+archive collisions and commit completion/provenance together. Windows storage
+CI exercises existing-file replacement through the supported Tokio/Rust API.
+These are included in the unreleased 0.5.1 patch after the combined #52 merge;
+previously published releases remain immutable.
+
+Write quarantine is a startup snapshot. Creating or resolving a sync-conflict
+file externally requires a restart to update enforcement, even if a later
+mutation refreshes conflict listings. Full post-mutation index rebuilds provide
+immediate read-after-write consistency but cost O(vault size); no incremental
+indexing or external watcher is claimed.
+
+Soft deletion reserves a trash hard link and then unlinks the original. It is
+not a single atomic rename: a crash or cancellation can leave both names. When
+an audit start was recorded without a terminal event, recovery diagnostics retain
+the pending path. Reconcile it by checking the original and corresponding trash
+candidates and comparing their content/hashes before choosing which copy to keep;
+never automatically remove a copy merely because an attempt is incomplete. Audit
+persistence remains best effort, so failed start logging cannot guarantee a
+recovery entry. There is no automatic rollback or destructive recovery.
+
+Retention is deferred while incomplete attempts remain, so the row threshold
+is not a hard cap. Archive publication reserves a new filename before renaming;
+cancellation can leave an empty reserved placeholder but cannot replace an older
+archive. Publication requires the live database and archive on one filesystem.
+Replacement preserves portable permissions, including Unix mode bits; it does
+not promise preservation of extended ACLs, ownership or other platform metadata.

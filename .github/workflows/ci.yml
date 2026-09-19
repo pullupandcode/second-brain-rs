@@ -37,3 +37,14 @@ jobs:
         run: cargo deny check
       - name: audit
         run: cargo audit
+
+  windows-storage:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: storage replacements and path validation
+        run: cargo +stable test --locked --test storage --test storage_review --test audit_recovery
+      - name: archive collision and cleanup
+        run: cargo +stable test --locked --lib vault::audit::recovery_tests

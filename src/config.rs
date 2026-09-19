@@ -85,7 +85,8 @@ pub struct SkillsConfig {
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct SecurityConfig {
-    /// Hard denylist: paths blocked from all read/write/search operations.
+    /// Paths blocked from ordinary vault reads, writes and searches.
+    /// Configured skills remain a separately authorized `skills:read` surface.
     pub blocked_paths: Vec<String>,
 }
 
@@ -119,7 +120,7 @@ pub struct IndexConfig {
     pub watcher_polling: bool,
     /// Globs excluded from indexing.
     pub ignored_globs: Vec<String>,
-    /// Paths softly excluded from the index and listings (not write-blocking).
+    /// Paths softly excluded from direct reads, indexing and listings (not write-blocking).
     pub blocked_paths: Vec<String>,
 }
 
@@ -318,9 +319,13 @@ impl RawDeletes {
             self.trash_path.unwrap_or_else(|| ".trash/mcp".to_owned()),
             "deletes.trash_path",
         )?;
-        Ok(DeletesConfig {
-            trash_path: normalize_vault_path(&path).map_err(|e| invalid(&e.to_string()))?,
-        })
+        let trash_path = normalize_vault_path(&path).map_err(|e| invalid(&e.to_string()))?;
+        if trash_path.is_empty() {
+            return Err(invalid(
+                "deletes.trash_path must not resolve to the vault root",
+            ));
+        }
+        Ok(DeletesConfig { trash_path })
     }
 }
 
@@ -612,6 +617,42 @@ mod tests {
         let src = format!("{MINIMAL}\n[security]\nblocked_paths = [\"../escape\"]\n");
         let err = parse_config(&src).unwrap_err();
         assert!(matches!(err, ConfigError::Invalid(msg) if msg.contains("security.blocked_paths")));
+    }
+
+    #[test]
+    fn deletes_trash_path_rejects_empty_normalized_paths() {
+        for path in ["", ".", "./", "./.", ".//./", r".\", r".\.", r".\/./\"] {
+            let source = format!("{MINIMAL}\n[deletes]\ntrash_path = '{path}'\n");
+            let result = parse_config(&source);
+            assert!(
+                matches!(result, Err(ConfigError::Invalid(ref message)) if message.contains("deletes.trash_path")),
+                "trash_path={path:?} must fail validation, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn deletes_trash_path_accepts_defaults_and_normalized_directories() {
+        assert_eq!(
+            parse_config(MINIMAL).unwrap().deletes.trash_path,
+            ".trash/mcp"
+        );
+        assert_eq!(
+            parse_config(&format!("{MINIMAL}\n[deletes]\n"))
+                .unwrap()
+                .deletes
+                .trash_path,
+            ".trash/mcp"
+        );
+        for (path, expected) in [
+            ("Trash", "Trash"),
+            ("./Trash//./mcp/", "Trash/mcp"),
+            (r".trash\mcp", ".trash/mcp"),
+            (r".\Trash\.\nested\", "Trash/nested"),
+        ] {
+            let source = format!("{MINIMAL}\n[deletes]\ntrash_path = '{path}'\n");
+            assert_eq!(parse_config(&source).unwrap().deletes.trash_path, expected);
+        }
     }
 
     #[test]

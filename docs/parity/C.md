@@ -1,7 +1,7 @@
 # Scope C: framework parity
 
 Target: TypeScript v1.1.1 `48b272337a6ef7e381fd175b2ff1844c02cebd7a`.
-Release candidate: 0.4.0. Implementation PR: [#50](https://github.com/pullupandcode/second-brain-rs/pull/50).
+Originally planned as 0.4.0; incorporated in 0.5.0 through #52. Original implementation PR: [#50](https://github.com/pullupandcode/second-brain-rs/pull/50).
 
 ## Reference and story mapping
 
@@ -133,10 +133,10 @@ Clippy. Full HTTP/dependency/repository checks remain required for the new candi
 The extended-year workflow test also passes for records, both capture tools and
 daily notes. The reference QA failure log is `/private/tmp/parity-qa-c/results.log`.
 
-Rebase onto the actual A/B squash commits is still required once those merges are
-permitted. Independent code review and QA must approve the final SHA; new commits
-invalidate earlier approvals. No 0.4.0 tag or release is published by this branch,
-and no unmerged story is marked completed.
+PR #52 merged this complete framework implementation at `8b98349` on
+2026-09-18. Its reviewed head contains C's final `7acf829` as an ancestor, and
+the squash tree equals that combined head. PR #50 is superseded, so no separate
+framework rebase or 0.4.0 release is needed. Later storage fixes remain in #49.
 
 Numeric review follow-up: `cargo +stable test --offline --lib framework::schema::tests::`
 passes all seven schema tests. The boundary table covers `1e-7` / `0.0000001`,
@@ -144,5 +144,5 @@ passes all seven schema tests. The boundary table covers `1e-7` / `0.0000001`,
 minimum normal/subnormal, zero, signed zero and overflow. Maximum finite and
 smallest normal/subnormal defaults also survive serialization/deserialization of
 the schema response with exact float bits. No `float_roundtrip` feature or new
-dependency was needed. The shared writer numeric-serialization follow-up must be
-inherited before the final combined review.
+dependency was needed. The combined #52 merge includes the shared writer numeric-serialization
+follow-up and its final independent review.

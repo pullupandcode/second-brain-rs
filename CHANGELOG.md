@@ -2,7 +2,18 @@
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-09-16
+## [0.5.1] - Unreleased
+
+- Keep incomplete audit attempts in the live store by deferring retention; reserve archive destinations without overwriting existing history and commit completion/provenance in one transaction.
+- Reject trash paths that normalize to the vault root and Windows drive-prefixed vault paths.
+- Preserve Unix permission bits during replacement, frontmatter and marker writes; prepare replacement files with restricted temporary permissions.
+- Exercise storage replacement and path validation on Windows CI using Tokio's documented existing-file replacement behavior.
+- Reconcile the PR stack after #52 incorporated storage, frameworks and authentication together; preserve all v0.5.0 behavior.
+
+## [0.5.0] - 2026-09-18
+
+Combined delivery through #52, including the storage and framework scopes below.
+Versions 0.3.0 and 0.4.0 were planned scope labels, not separately published releases.
 
 - Verify production RS256/ES256 JWT access tokens against configured issuer JWKS;
   enforce issuer, audience, subject, expiry, optional not-before and algorithm/key
@@ -21,7 +32,7 @@
   operational log entries optionally include arguments. `exp` is required as
   intentional hardening over the pinned reference's optional-exp behavior.
 
-## [0.4.0] - 2026-09-16
+## [0.4.0] - Included in 0.5.0
 
 - Add reference-compatible framework schemas, LYT/PARA/Zettelkasten presets, overlays, and atomic registry persistence.
 - Implement framework initialization, registration, listing, validation/reload, and live composition without restart.
@@ -32,7 +43,7 @@
 - Normalize ISO date forms and overflow consistently across records, captures, and daily notes, including local timezone and daylight-saving resolution, signed extended years, and JavaScript date bounds.
 - Apply effective path policy to schema, registry, template, and note access; provide a copyable LYT schema.
 
-## [0.3.0] - 2026-09-16
+## [0.3.0] - Included in 0.5.0
 
 - Implement atomic create/replace, frontmatter patches and marker replacements with optimistic hashes, cooldown and per-path serialization.
 - Serialize numeric frontmatter with JavaScript canonical number spelling, preserving finite values across write/read roundtrips.

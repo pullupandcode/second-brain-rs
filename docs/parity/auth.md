@@ -120,7 +120,10 @@ cargo-deny and cargo-audit. Independent signed/header/scope/cache probes pass.
 The final transport integration leaves mutation-tested source and auth tests
 byte-identical to `e8743e2`; its full unmutated suite passes. Final exact-head
 code/QA decisions and CI are recorded on the PR, including any documentation-only
-follow-up. A is merged and published as immutable v0.2.0. Scope D is not merged
-or released: it still requires repository review gates and actual B/C squash-commit
-integration. Its implementation is unchanged by the A squash rebase.
+follow-up. A is merged and published as immutable v0.2.0. The user approved
+and merged #52 on 2026-09-18 at `8b98349`, incorporating B/C/D together as
+0.5.0, published as an immutable release after successful main CI.
+The squash tree is identical to the approved `5d5c046` candidate. Later
+storage review fixes are isolated in #49 as the 0.5.1 patch; authentication
+implementation and its earlier mutation evidence are retained.
 See [the delivery ledger](../PARITY_STATUS.md) for current gates.
