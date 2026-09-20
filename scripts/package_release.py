@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package and smoke-test native release executables (Python 3.12+)."""
+"""Package and smoke-test native release executables (Python 3.11+)."""
 import argparse
 import json
 from pathlib import Path, PurePosixPath
@@ -64,7 +64,14 @@ def unpack_archive(archive, destination):
                 or len({p.parts[0] for p in paths}) != 1
                 or {p.name for p in paths} != {executable, *DOCUMENTS}):
             raise ValueError('Unexpected archive contents')
-        if not is_zip and any(not entry.isfile() for entry in entries):
+        if is_zip:
+            # Zip entries carry the Unix type bits in the upper half of external_attr
+            # (zero when absent); reject directory entries and any non-regular mode.
+            irregular = any(entry.is_dir() or (entry.external_attr >> 16) & 0o170000 not in (0, 0o100000)
+                            for entry in entries)
+        else:
+            irregular = any(not entry.isfile() for entry in entries)
+        if irregular:
             raise ValueError('Archive may only contain regular files')
         # Write only validated regular bytes, with controlled permissions.
         destination.mkdir(parents=True, exist_ok=True)

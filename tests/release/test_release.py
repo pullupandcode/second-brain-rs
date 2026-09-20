@@ -330,6 +330,15 @@ class ReleaseTests(unittest.TestCase):
         self.assertTrue(self.gh.release["draft"])
         self.assertIsNone(self.gh.latest)
 
+    def test_asset_path_containing_hash_is_never_passed_to_gh_upload(self):
+        hashed = self.root / "dist#1"
+        hashed.mkdir()
+        for name in NAMES:
+            (hashed / name).write_bytes(self.assets[name])
+        with self.assertRaises(release.ReleaseError):
+            release.publish(self.root, hashed, SHA, REPO)
+        self.assertEqual(self.gh.mutations, [])
+
     def test_post_publish_immutability_must_be_verified(self):
         self.gh.lock_published = False
         self.reject()

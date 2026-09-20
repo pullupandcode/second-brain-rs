@@ -243,6 +243,8 @@ def publish(root: Path, assets: Path, sha: str, repository: str) -> None:
     if command(["git", "rev-parse", "HEAD"], cwd=root).decode().strip() != sha:
         raise ReleaseError("Release SHA does not match checked-out HEAD")
     assets = assets.resolve(strict=True)
+    if "#" in str(assets):
+        raise ReleaseError(f"Asset directory path must not contain '#': {assets}")
     expected, sums = local_assets(assets, version)
     # The current repository setting requires Administration:read, which the
     # publisher intentionally lacks. Administrators must keep it enabled. This
@@ -288,8 +290,12 @@ def publish(root: Path, assets: Path, sha: str, repository: str) -> None:
     with tempfile.TemporaryDirectory(prefix="release-checksums-") as temporary:
         checksum_path = Path(temporary) / "SHA256SUMS"
         checksum_path.write_bytes(sums)
-        for name in sorted(set(expected) - present):
-            path = checksum_path if name == "SHA256SUMS" else assets / name
+        uploads = {name: checksum_path if name == "SHA256SUMS" else assets / name
+                   for name in sorted(set(expected) - present)}
+        # gh treats "path#label" as a display-label separator; never pass a '#' through.
+        if any("#" in str(path) for path in uploads.values()):
+            raise ReleaseError("Asset paths must not contain '#'")
+        for path in uploads.values():
             command(["gh", "release", "upload", tag, str(path), "--repo", repository])
     remote = api(repository, f"releases/{release_id}")
     if remote.get("id") != release_id or remote.get("tag_name") != tag or remote.get("draft") is not True:

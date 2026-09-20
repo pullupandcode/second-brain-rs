@@ -1,5 +1,6 @@
 """Archive contents and permissions are part of the download contract."""
 import importlib.util
+import io
 import pathlib
 import tarfile
 import tempfile
@@ -61,6 +62,52 @@ class PackageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             package.unpack_archive(archive, self.root / 'unpacked')
         self.assertFalse((self.root / 'escaped').exists())
+
+    def _entries(self, executable):
+        return [f'pkg/{name}' for name in (executable, *package.DOCUMENTS)]
+
+    def test_unpack_rejects_tar_symlink_with_valid_name(self):
+        archive = self.root / 'linked.tar.gz'
+        with tarfile.open(archive, 'w:gz') as handle:
+            for name in self._entries('second-brain-rs'):
+                member = tarfile.TarInfo(name)
+                if name.endswith('config.example.toml'):
+                    member.type = tarfile.SYMTYPE
+                    member.linkname = '/etc/passwd'
+                    handle.addfile(member)
+                else:
+                    member.size = 3
+                    handle.addfile(member, io.BytesIO(b'abc'))
+        with self.assertRaises(ValueError):
+            package.unpack_archive(archive, self.root / 'unpacked')
+        self.assertFalse((self.root / 'unpacked').exists())
+
+    def test_unpack_rejects_zip_directory_entry(self):
+        archive = self.root / 'directory.zip'
+        with zipfile.ZipFile(archive, 'w') as handle:
+            for name in self._entries('second-brain-rs.exe'):
+                if name.endswith('config.example.toml'):
+                    handle.writestr(name + '/', b'')
+                else:
+                    handle.writestr(name, b'abc')
+        with self.assertRaises(ValueError):
+            package.unpack_archive(archive, self.root / 'unpacked')
+        self.assertFalse((self.root / 'unpacked').exists())
+
+    def test_unpack_rejects_zip_symlink_mode_entry(self):
+        archive = self.root / 'symlink.zip'
+        with zipfile.ZipFile(archive, 'w') as handle:
+            for name in self._entries('second-brain-rs.exe'):
+                info = zipfile.ZipInfo(name)
+                if name.endswith('config.example.toml'):
+                    info.external_attr = (0o120777 << 16)
+                    handle.writestr(info, b'/etc/passwd')
+                else:
+                    info.external_attr = (0o100644 << 16)
+                    handle.writestr(info, b'abc')
+        with self.assertRaises(ValueError):
+            package.unpack_archive(archive, self.root / 'unpacked')
+        self.assertFalse((self.root / 'unpacked').exists())
 
     def test_unpack_rejects_extra_or_missing_files(self):
         archive = self.root / 'incomplete.zip'

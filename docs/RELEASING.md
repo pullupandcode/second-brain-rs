@@ -35,7 +35,10 @@ settings, and run the executable with `--config config.local.toml`.
 1. Increase stable `X.Y.Z` in Cargo.toml and the root Cargo.lock package together.
    Add a nonempty versioned changelog section. Downgrades, mismatched metadata and
    prerelease/build-metadata versions fail validation. An unchanged version skips
-   publishing; documentation-only merges do not require a bump.
+   publishing; documentation-only merges do not require a bump. A push to `main`
+   whose previous commit is unreachable (a force-push or branch creation, where
+   `github.event.before` is all zeros) fails `release-plan` instead of publishing;
+   rerun after the next normal merge.
 2. PR CI builds all four optimized native executables with `--locked`, packages
    them and starts each extracted binary against a temporary vault. `/healthz`
    must return success. This tests the actual downloadable bytes, not only a
@@ -74,6 +77,15 @@ is verified read-only on rerun. Rerun the original job with its original artifac
 rebuilding can change archive bytes, so different bytes cannot replace a prior
 partial upload. Build artifacts are retained for 14 days. If they expire or a draft
 conflicts, investigate manually; never rewrite a published release.
+
+An upload interrupted mid-transfer can leave the asset in GitHub's `starter`
+(non-`uploaded`) state; the publisher refuses it on every rerun without mutating
+anything, so the release stays a draft. The safe recovery is to delete that single
+incomplete asset from the still-draft release (drafts are not immutable, so nothing
+published is rewritten) and rerun the job. If main advances between the pre-tag and
+pre-publish current-main checks, the annotated tag and draft release are left in
+place and the run fails; an administrator should delete that draft and tag manually
+before or after releasing the next version. Never delete a published release or tag.
 
 ## Verification references
 

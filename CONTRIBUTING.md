@@ -29,7 +29,7 @@ cargo +stable deny check
 cargo +stable audit
 ```
 
-All five must pass. Release automation changes also require Python 3.12+ tests:
+All five must pass. Release automation changes also require Python 3.11+ tests:
 
 ```bash
 python -m unittest discover -s tests/release -v
