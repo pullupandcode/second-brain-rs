@@ -4,10 +4,21 @@ A Rust Streamable HTTP MCP server for Markdown vaults, targeting
 [`second-brain-mcp` v1.1.1](https://github.com/pullupandcode/second-brain-mcp/tree/48b272337a6ef7e381fd175b2ff1844c02cebd7a).
 The combined **v0.5.0 implementation**, merged through #52, includes audited note mutations, frameworks,
 captures, daily notes, private skill prompts, and production JWT verification.
-The **v0.5.1 candidate** adds storage review fixes. Release status, verification
+Version **0.5.1** adds storage review fixes; **0.5.2** adds downloadable executables
+and automated immutable releases. Release status, verification
 and known limitations are tracked in the [delivery ledger](docs/PARITY_STATUS.md).
 
-Build with current stable Rust:
+Download your platform archive and `SHA256SUMS` from the
+[GitHub releases](https://github.com/pullupandcode/second-brain-rs/releases).
+Starting with v0.5.2, releases include Linux x86-64, Windows x86-64, macOS Apple
+Silicon and macOS Intel executables. Extract the archive, copy
+`config.example.toml` to `config.local.toml`, configure it, then run
+`./second-brain-rs --config config.local.toml` (PowerShell:
+`.\second-brain-rs.exe --config config.local.toml`). No Rust installation is needed.
+See [installation and release details](docs/RELEASING.md) for checksums and supported
+operating-system baselines. Existing immutable releases cannot gain binary assets.
+
+To build from source with current stable Rust:
 
 ```sh
 cargo +stable build --release --locked
@@ -29,7 +40,7 @@ and `mcp-name` headers, and can answer protocol-only requests before authenticat
 
 ## Tools and scopes
 
-The combined candidate has 31 base tools and three optional OCR contract tools.
+The server has 31 base tools and three optional OCR contract tools.
 Scopes are independent: `admin` does not imply any other scope.
 
 | Scope | Tools or operations |

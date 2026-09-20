@@ -12,14 +12,14 @@ The user approved and merged [PR #52](https://github.com/pullupandcode/second-br
 ahead of the remaining stack at `8b98349f1126c8ea02f7b4ac2c0074ae69d9acda`.
 That squash has the exact tree of independently approved D head `5d5c046`,
 which includes the approved B and C commits. Storage and frameworks are therefore
-already on main. #50 is superseded; #49 retains only the later storage review
-fixes and a 0.5.1 patch bump. Planned versions 0.3.0/0.4.0 were never published.
+already on main. #50 is superseded; #49 delivered the later storage review
+fixes as the 0.5.1 patch. Planned versions 0.3.0/0.4.0 were never published.
 
 | Scope / delivered version | PR | Verification | Merge / release |
 |---|---|---|---|
 | A: protocol, reads, skills, OCR / 0.2.0 | #51 | 89 tests; reviewed squash tree | Merged `2b6dcf1`; immutable v0.2.0 |
 | B/C/D: storage, framework, auth / 0.5.0 | #52 (includes #50 and original #49 scope) | 182 tests; both reviewers approved `5d5c046`; squash tree identical | Merged `8b98349`; immutable [v0.5.0](https://github.com/pullupandcode/second-brain-rs/releases/tag/v0.5.0), release ID `391790243` |
-| Storage review fixes / 0.5.1 | #49 | 196 combined tests; format, strict Clippy, dependency gates and patch semver check pass; exact-head reviews/CI required | Unmerged; unreleased |
+| Storage review fixes / 0.5.1 | #49 | 196 tests, both independent approvals, Linux/Windows CI and patch API checks passed | Merged `bf78768`; immutable [v0.5.1](https://github.com/pullupandcode/second-brain-rs/releases/tag/v0.5.1), release ID `391898429` |
 
 Each candidate passes nightly formatting, current-stable Clippy with warnings
 denied, all-feature tests, cargo-deny and cargo-audit. Counts include inherited
@@ -58,17 +58,18 @@ GitHub identity and do not represent separate human accounts.
 
 GitHub ruleset `17368994` requires one formal approval from another account.
 The coordinator has not changed or bypassed repository protections. The user
-approved the combined #52 merge; #49 still requires both independent exact-head
-agent decisions, green CI and the repository's formal review gate.
+approved and merged #52 and #49 after their verification. Future PRs retain the
+independent exact-head decisions, CI and repository formal review gates.
 
 The original B → C → D sequence is superseded. Main CI run `35395371018`
 passed for the #52 squash; v0.5.0 was published and verified `immutable: true`.
-Merge #49 as the 0.5.1 patch only after its renewed gates pass, then
-publish at its actual squash following main CI. Do not merge #50 again, create
+PR #49 merged at `bf78768`; main CI `35418104733` passed and immutable v0.5.1
+was published. The v0.5.2 candidate adds automated executable releases; see
+[release operations](RELEASING.md). Do not merge #50 again, create
 retroactive 0.3.0/0.4.0 releases, or rewrite published versions.
 
 Original B/C implementation stories were incorporated by #52; #30's shared
-implementation is now present. Storage review fixes remain pending #49. Tracker
+implementation is now present. Storage review fixes shipped through #49 and v0.5.1. Tracker
 acceptance and release closure must reflect this actual delivery sequence.
 The [review disposition](parity/B_REVIEW.md) documents fixes and remaining
 operational limitations, including startup quarantine and interrupted soft delete.
