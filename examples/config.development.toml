@@ -1,0 +1,48 @@
+# Local demonstration only. Run from the directory containing demo-vault/.
+# This mode does not authenticate users; callers can choose their own scopes.
+listen = "127.0.0.1:3000"
+public_base_url = "http://127.0.0.1:3000"
+vault_path = "./demo-vault"
+state_path = "./demo-state"
+
+[auth]
+mode = "development"
+audience = "second-brain-rs"
+# Required configuration fields; no issuer requests are made in development mode.
+trusted_issuers = ["https://example.invalid/"]
+discovery_authorization_server = "https://example.invalid/"
+jwks_cache_ttl_seconds = 3600
+jwt_algorithms = ["RS256"]
+development_default_scopes = []
+
+[index]
+watcher_polling = false
+ignored_globs = [".obsidian/workspace*", ".trash/**", "**/.DS_Store", "**/*.sync-conflict-*"]
+blocked_paths = []
+
+[security]
+blocked_paths = ["Private/**"]
+
+[writes]
+cooldown_seconds = 0
+
+[deletes]
+trash_path = ".trash/mcp"
+
+[audit]
+retention_max_rows = 0
+
+[framework]
+schema_path = "_meta/framework.yaml"
+
+[skills]
+map_paths = []
+
+[daily_note]
+capture_default_pattern = "B"
+
+[ocr]
+enabled = false
+
+[logging]
+log_args = false

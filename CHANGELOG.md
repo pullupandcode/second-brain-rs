@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add complete end-user installation, configuration, development, workflow, tool, deployment and troubleshooting guides, with dedicated Authentik, Authelia and Keycloak setup pages.
+
 ## [0.5.2] - 2026-09-18
 
 - Build and smoke-test downloadable native executables for Linux x86-64, Windows x86-64, and macOS Apple Silicon/Intel in pull-request CI.

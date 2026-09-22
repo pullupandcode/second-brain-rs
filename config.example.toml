@@ -12,6 +12,8 @@ audience = "second-brain-rs"
 trusted_issuers = ["https://idp.example.com/application/o/second-brain/"]
 discovery_authorization_server = "https://idp.example.com/application/o/second-brain/"
 # JWKS resolves relative to each issuer: .well-known/jwks.json.
+# Provider discovery jwks_uri is not used. See docs/AUTHENTICATION.md and
+# docs/oidc/ for required issuer/JWKS mappings before using a real provider.
 # Cache reuse TTL; 0 disables reuse. Failed/unknown-key refreshes are guarded.
 jwks_cache_ttl_seconds = 3600
 jwt_algorithms = ["RS256", "ES256"]

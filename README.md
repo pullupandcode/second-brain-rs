@@ -2,41 +2,41 @@
 
 A Rust Streamable HTTP MCP server for Markdown vaults, targeting
 [`second-brain-mcp` v1.1.1](https://github.com/pullupandcode/second-brain-mcp/tree/48b272337a6ef7e381fd175b2ff1844c02cebd7a).
-The combined **v0.5.0 implementation**, merged through #52, includes audited note mutations, frameworks,
-captures, daily notes, private skill prompts, and production JWT verification.
-Version **0.5.1** adds storage review fixes; **0.5.2** adds downloadable executables
-and automated immutable releases. Release status, verification
-and known limitations are tracked in the [delivery ledger](docs/PARITY_STATUS.md).
+Release **v0.5.2** provides native executables for Linux x86-64, Windows x86-64,
+and macOS Apple Silicon/Intel. It supports note search and audited edits,
+frameworks and records, captures, daily notes, private skill prompts, and JWT
+authentication. No Rust installation is needed for a packaged executable.
 
-Download your platform archive and `SHA256SUMS` from the
-[GitHub releases](https://github.com/pullupandcode/second-brain-rs/releases).
-Starting with v0.5.2, releases include Linux x86-64, Windows x86-64, macOS Apple
-Silicon and macOS Intel executables. Extract the archive, copy
-`config.example.toml` to `config.local.toml`, configure it, then run
-`./second-brain-rs --config config.local.toml` (PowerShell:
-`.\second-brain-rs.exe --config config.local.toml`). No Rust installation is needed.
-See [installation and release details](docs/RELEASING.md) for checksums and supported
-operating-system baselines. Existing immutable releases cannot gain binary assets.
+## Start here
 
-To build from source with current stable Rust:
+Follow [getting started](docs/GETTING_STARTED.md) to download and verify a release,
+create a vault/configuration, and connect a client. For a local trial, use the
+[development guide](docs/DEVELOPMENT.md) and its complete copyable configuration.
+For a network deployment, configure JWT authentication and HTTPS.
 
-```sh
-cargo +stable build --release --locked
-./target/release/second-brain-rs --config config.local.toml
-```
+| Guide | What it covers |
+|---|---|
+| [End-user documentation](docs/USER_GUIDE.md) | Reading order, architecture and supported behavior |
+| [Installation and first connection](docs/GETTING_STARTED.md) | Executables, source builds, Windows/macOS/Linux and MCP clients |
+| [Development mode](docs/DEVELOPMENT.md) | Local demo, source execution, scope tokens and HTTP request helpers |
+| [Configuration reference](docs/CONFIGURATION.md) | Every TOML option, defaults, paths, privacy and environment variables |
+| [Common use cases](docs/USE_CASES.md) | Search, safe edits, capture, records, daily notes and private prompts |
+| [Tools and scopes](docs/TOOLS.md) | All 34 tools, parameters, permissions and response conventions |
+| [Authentication](docs/AUTHENTICATION.md) | Access tokens, scopes, JWKS compatibility and verification |
+| [Authentik](docs/oidc/authentik.md) · [Authelia](docs/oidc/authelia.md) · [Keycloak](docs/oidc/keycloak.md) | Provider-specific client, audience, scopes and issuer/key endpoint setup |
+| [Deployment and operations](docs/DEPLOYMENT.md) | HTTPS proxy, service setup, backups and upgrades |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Startup, auth, clients, writes, frameworks and stale indexes |
 
-Copy [config.example.toml](config.example.toml), set an existing vault and separate
-state directory, and configure your JWT issuer and audience. Production mode
-verifies RS256/ES256 signatures with cached issuer keys. Local development mode
-accepts `Bearer scope=vault:read`; missing or unrecognized development scope claims
-use the configured fallback scopes. Development mode is restricted to loopback
-unless an operator explicitly enables its environment override.
+Production auth requires a signed JWT access token with the configured audience,
+issuer and scopes. **Read the provider guide before deployment:** this release
+derives a JWKS URL from the issuer instead of consuming provider discovery's
+`jwks_uri`. The guides document the required compatibility mappings and issuer
+constraints. The server supplies no web UI, stdio transport or OAuth login server.
 
-The endpoints are `/mcp`, `/tools`, `/healthz`, and
+The HTTP endpoints are `/mcp`, `/tools`, `/healthz`, and
 `/.well-known/oauth-protected-resource`. MCP uses stateless JSON responses and
-checks identity and scopes independently for each dispatched operation. Protocol
-preflight bounds request bodies at 1,000,000 bytes, validates optional `mcp-method`
-and `mcp-name` headers, and can answer protocol-only requests before authentication.
+checks authorization independently for dispatched operations. Health and
+protocol-only initialization can succeed before authentication.
 
 ## Tools and scopes
 
